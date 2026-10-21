@@ -1,0 +1,27 @@
+.venv/
+.hfms-bridge/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+.env
+
+# OS
+.DS_Store
+
+# IDE
+.vscode
+
+# Other
+# Design history, disposable prototypes, and local execution plans
+docs/superpowers/
+docs/design-previews/
+docs/plans/
+.superpowers/
+frontend/node_modules/
+frontend/dist/
+*.safetensors
+*.pt
+*.pth
