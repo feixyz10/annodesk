@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -9,7 +10,8 @@ from fastapi.responses import FileResponse, Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from annodesk.domain import Annotation
+from annodesk.domain import Annotation, uid
+from annodesk.inference import SegmentationService, SegmentRequest
 from annodesk.storage import Project
 
 
@@ -25,6 +27,14 @@ class CategoryInput(BaseModel):
 def project_routes(initial: Path | None = None) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
     current = Project(initial) if initial else None
+
+    services = {}
+
+    def service():
+        item = project()
+        if item.metadata["id"] not in services:
+            services[item.metadata["id"]] = SegmentationService(item)
+        return services[item.metadata["id"]]
 
     def project() -> Project:
         if current is None:
@@ -121,6 +131,49 @@ def project_routes(initial: Path | None = None) -> APIRouter:
                 category["color"] = body.color
             item.write_metadata()
             return category
+
+    @router.post("/images/{image_id}/segment")
+    def segment(image_id: str, body: SegmentRequest):
+        item = service()
+        return item.executor.submit(item.process, image_id, body).result()
+
+    @router.post("/jobs")
+    def create_job(body: SegmentRequest):
+        item = service()
+        job_id = uid()
+        job = {
+            "id": job_id,
+            "status": "running",
+            "completed": 0,
+            "failed": [],
+            "total": len(item.project.entries),
+            "cancel": False,
+        }
+        item.jobs[job_id] = job
+
+        def run():
+            for image_id in list(item.project.entries):
+                if job["cancel"]:
+                    break
+                try:
+                    item.executor.submit(item.process, image_id, body).result()
+                except Exception as error:
+                    job["failed"].append({"image": image_id, "error": str(error)})
+                job["completed"] += 1
+            job["status"] = "cancelled" if job["cancel"] else "complete"
+
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
+    @router.get("/jobs/{job_id}")
+    def get_job(job_id: str):
+        return service().jobs[job_id]
+
+    @router.delete("/jobs/{job_id}")
+    def cancel_job(job_id: str):
+        job = service().jobs[job_id]
+        job["cancel"] = True
+        return job
 
     # Keep access local to this application instance rather than a module global.
     router.project = project
