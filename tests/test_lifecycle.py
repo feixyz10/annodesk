@@ -46,3 +46,14 @@ def test_export_and_recoverable_exclusion(tmp_path):
     restore_trash(project, operation)
     assert (tmp_path / "images/train/a.png").exists()
     assert Project(tmp_path).annotation(image_id).excluded
+
+
+def test_reindex_refuses_external_label_changes(tmp_path):
+    import pytest
+
+    from annodesk.storage import RevisionConflict
+
+    project, image_id = make_project(tmp_path)
+    project.label_path(image_id).write_text("0 0.8 0.8 0.2 0.2\n")
+    with pytest.raises(RevisionConflict):
+        reindex_classes(project)

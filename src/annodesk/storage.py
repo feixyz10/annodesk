@@ -12,6 +12,7 @@ from PIL import Image
 
 from annodesk.colors import choose_color
 from annodesk.domain import Annotation, Instance, uid
+from annodesk.masks import decode_mask
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
@@ -90,6 +91,8 @@ class Project:
     def _import_classes(self):
         config = self.root / "data.yaml"
         data = yaml.safe_load(config.read_text()) if config.exists() else {}
+        if data is not None and not isinstance(data, dict):
+            raise ValueError("data.yaml must contain a mapping")
         names = (data or {}).get("names", {})
         if isinstance(names, list):
             names = dict(enumerate(names))
@@ -217,13 +220,7 @@ class Project:
             old = self.annotation(image_id)
             if annotation.revision != old.revision:
                 raise RevisionConflict("Annotation changed. Reload before saving.")
-            record = json.loads(self.annotation_path(image_id).read_text())
-            expected = record.get("label_fingerprints")
-            actual = [fingerprint(self.label_path(image_id, seg)) for seg in (False, True)]
-            if expected is not None and expected != actual:
-                raise RevisionConflict(
-                    "YOLO labels changed outside AnnoDesk; reopen or reconcile them."
-                )
+            self.validate_fingerprints(image_id)
             width, height = self.image_size(image_id)
             indices = {c["id"]: c["index"] for c in self.metadata["classes"]}
             detection, segmentation = [], []
@@ -236,6 +233,17 @@ class Project:
                 if instance.class_id not in indices:
                     raise ValueError("Unknown class")
                 index = indices[instance.class_id]
+                if instance.mask is not None:
+                    if instance.mask.get("size") != [height, width] or not isinstance(
+                        instance.mask.get("counts"), str
+                    ):
+                        raise ValueError("Invalid mask dimensions or counts")
+                    try:
+                        decoded = decode_mask(instance.mask)
+                    except Exception as error:
+                        raise ValueError("Invalid mask encoding") from error
+                    if decoded.shape != (height, width):
+                        raise ValueError("Invalid mask dimensions")
                 if instance.box:
                     x1, y1, x2, y2 = instance.box
                     if x1 < 0 or y1 < 0 or x2 > width or y2 > height:
@@ -273,6 +281,16 @@ class Project:
                 }
             )
             return updated
+
+    def validate_fingerprints(self, image_id: str):
+        self.annotation(image_id)
+        record = json.loads(self.annotation_path(image_id).read_text())
+        expected = record.get("label_fingerprints")
+        actual = [fingerprint(self.label_path(image_id, seg)) for seg in (False, True)]
+        if expected is not None and expected != actual:
+            raise RevisionConflict(
+                "YOLO labels changed outside AnnoDesk; reopen or reconcile them."
+            )
 
     def image_size(self, image_id: str) -> tuple[int, int]:
         with Image.open(self.image_path(image_id)) as image:

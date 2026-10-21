@@ -14,6 +14,8 @@ let stage: Konva.Stage,
   start: { x: number; y: number } | null = null,
   space = false,
   transformer: Konva.Transformer;
+const maskCache = new Map<string, HTMLImageElement>(),
+  loadingMasks = new Set<string>();
 function fit() {
   if (!stage || !store.annotation) return;
   const a = store.annotation;
@@ -67,11 +69,44 @@ function draw() {
     const color =
       store.meta?.classes.find((c) => c.id === object.class_id)?.color ??
       "#657286";
+    if (object.mask && store.current) {
+      const imageId = store.current.id,
+        key = imageId + object.id + a.revision + color;
+      const cached = maskCache.get(key);
+      if (cached)
+        layer.add(
+          new Konva.Image({
+            image: cached,
+            width: a.width,
+            height: a.height,
+            listening: false,
+          }),
+        );
+      else if (!loadingMasks.has(key)) {
+        loadingMasks.add(key);
+        const im = new Image();
+        im.crossOrigin = "anonymous";
+        im.src =
+          apiBase +
+          `/images/${imageId}/masks/${object.id}?revision=${a.revision}&color=${encodeURIComponent(color)}`;
+        im.onload = () => {
+          loadingMasks.delete(key);
+          if (store.current?.id === imageId) {
+            maskCache.set(key, im);
+            draw();
+          }
+        };
+        im.onerror = () => {
+          loadingMasks.delete(key);
+          store.error = "Could not load lossless mask overlay";
+        };
+      }
+    }
     for (const points of object.polygons) {
       const shape = new Konva.Line({
         points: points.flat(),
         closed: true,
-        fill: color + "55",
+        fill: object.mask ? "rgba(0,0,0,0.001)" : color + "55",
         stroke: color,
         strokeWidth: 1.5,
         strokeScaleEnabled: false,
@@ -261,6 +296,8 @@ onMounted(() => {
 });
 async function loadImage() {
   background = null;
+  maskCache.clear();
+  loadingMasks.clear();
   const id = store.current?.id;
   if (!id) return;
   const im = new Image();

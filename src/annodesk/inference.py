@@ -92,6 +92,7 @@ class SegmentationService:
         self.project = project
         self.adapter = adapter or UltralyticsAdapter()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="annodesk-inference")
+        self.active = False
         self.jobs: dict[str, dict] = {}
         self.job_lock = threading.RLock()
 
@@ -99,6 +100,13 @@ class SegmentationService:
         self.executor.shutdown(wait=False, cancel_futures=True)
 
     def process(self, image_id: str, body: SegmentRequest):
+        self.active = True
+        try:
+            return self._process(image_id, body)
+        finally:
+            self.active = False
+
+    def _process(self, image_id: str, body: SegmentRequest):
         with self.project.lock:
             annotation = self.project.annotation(image_id)
             if annotation.excluded:

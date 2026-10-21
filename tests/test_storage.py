@@ -59,3 +59,16 @@ def test_invalid_geometry_rejected(tmp_path):
         project.save(project.images()[0]["id"], ann)
     with pytest.raises(ValueError):
         Instance(class_id="x", box=[float("nan"), 0, 20, 10])
+
+
+def test_mismatched_mask_dimensions_rejected(tmp_path):
+    import numpy as np
+
+    from annodesk.masks import encode_mask
+
+    project = Project(dataset(tmp_path))
+    image_id = project.images()[0]["id"]
+    ann = project.annotation(image_id)
+    ann.instances[0].mask = encode_mask(np.ones((2, 2), dtype=np.uint8))
+    with pytest.raises(ValueError, match="mask"):
+        project.save(image_id, ann)

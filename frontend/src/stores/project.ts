@@ -45,13 +45,21 @@ export const useProject = defineStore("project", () => {
       future.value = [];
     }
   }
-  function changed(geometry = false) {
+  function changed(geometry: boolean | "detection" | "segmentation" = false) {
     version++;
     dirty.value = true;
     if (geometry && annotation.value) {
-      const key = `${task.value}_review` as
-        "detection_review" | "segmentation_review";
-      if (annotation.value[key] === "ok") annotation.value[key] = "pending";
+      const affected =
+        geometry === true
+          ? ["detection_review", "segmentation_review"]
+          : geometry === "detection"
+            ? ["detection_review", "segmentation_review"]
+            : ["segmentation_review"];
+      for (const key of affected as (
+        "detection_review" | "segmentation_review"
+      )[]) {
+        if (annotation.value[key] === "ok") annotation.value[key] = "pending";
+      }
     }
     clearTimeout(timer);
     timer = setTimeout(() => void save().catch(() => {}), 500);
@@ -95,6 +103,7 @@ export const useProject = defineStore("project", () => {
       const loaded = await request<Annotation>(
         `/images/${image.id}/annotation`,
       );
+      await save();
       current.value = image;
       annotation.value = loaded;
       selected.value = null;
@@ -102,7 +111,11 @@ export const useProject = defineStore("project", () => {
       dirty.value = false;
       history.value = [];
       future.value = [];
-      if (autoSegment.value) void segment(true);
+      if (
+        autoSegment.value &&
+        loaded.instances.some((o) => o.box && !o.mask && !o.polygons.length)
+      )
+        void segment(true);
     } catch (e) {
       error.value = String(e);
     } finally {
@@ -120,7 +133,8 @@ export const useProject = defineStore("project", () => {
       if (all.length >= page.total) break;
     }
     images.value = all;
-    defaultClass.value ??= meta.value.classes[0]?.id ?? null;
+    if (!meta.value.classes.some((c) => c.id === defaultClass.value))
+      defaultClass.value = meta.value.classes[0]?.id ?? null;
   }
   async function open(path: string) {
     try {
@@ -128,6 +142,7 @@ export const useProject = defineStore("project", () => {
       await request("/project/open", "POST", { path });
       current.value = null;
       annotation.value = null;
+      defaultClass.value = null;
       await refresh();
       if (images.value[0]) await load(images.value[0]);
     } catch (e) {
@@ -145,6 +160,7 @@ export const useProject = defineStore("project", () => {
     }
   }
   function assign(id: string) {
+    if (navigating.value) return;
     if (object.value) {
       checkpoint();
       object.value.class_id = id;
@@ -152,7 +168,7 @@ export const useProject = defineStore("project", () => {
     } else defaultClass.value = id;
   }
   function remove() {
-    if (!object.value || object.value.locked) return;
+    if (navigating.value || !object.value || object.value.locked) return;
     checkpoint();
     annotation.value!.instances = annotation.value!.instances.filter(
       (i) => i.id !== selected.value,
@@ -161,7 +177,7 @@ export const useProject = defineStore("project", () => {
     changed(true);
   }
   function undo(redo = false) {
-    if (!annotation.value) return;
+    if (navigating.value || !annotation.value) return;
     const stack = redo ? future.value : history.value,
       other = redo ? history.value : future.value;
     if (!stack.length) return;
@@ -181,8 +197,11 @@ export const useProject = defineStore("project", () => {
     if (!annotation.value || !current.value) return;
     try {
       await save();
+      const imageId = current.value!.id,
+        projectId = meta.value?.id,
+        editVersion = version;
       const updated = await request<Annotation>(
-        `/images/${current.value.id}/segment`,
+        `/images/${imageId}/segment`,
         "POST",
         {
           model: model.value,
@@ -191,7 +210,13 @@ export const useProject = defineStore("project", () => {
           class_id: defaultClass.value,
         },
       );
-      annotation.value = { ...annotation.value, ...updated };
+      if (current.value?.id !== imageId || meta.value?.id !== projectId) return;
+      if (version !== editVersion) {
+        error.value =
+          "Inference finished after newer edits. Your edits were kept; reload to reconcile.";
+        return;
+      }
+      annotation.value = { ...annotation.value!, ...updated };
       error.value = "";
     } catch (e) {
       error.value = String(e);

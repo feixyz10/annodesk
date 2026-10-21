@@ -2,18 +2,21 @@
 
 import hashlib
 import io
-import threading
+import json
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from annodesk.domain import Annotation, uid
+from annodesk.domain import Annotation
 from annodesk.inference import SegmentationService, SegmentRequest
+from annodesk.jobs import BatchJobs
 from annodesk.lifecycle import export_project, reindex_classes, restore_trash, trash_excluded
+from annodesk.masks import decode_mask
 from annodesk.storage import Project
 
 
@@ -41,12 +44,23 @@ def project_routes(initial: Path | None = None) -> APIRouter:
     current = Project(initial) if initial else None
 
     services = {}
+    batches = {}
 
     def service():
         item = project()
-        if item.metadata["id"] not in services:
+        existing = services.get(item.metadata["id"])
+        if existing is None or existing.project is not item:
+            if existing is not None:
+                existing.close()
+            batches.pop(item.metadata["id"], None)
             services[item.metadata["id"]] = SegmentationService(item)
         return services[item.metadata["id"]]
+
+    def batch():
+        item = service()
+        if item.project.metadata["id"] not in batches:
+            batches[item.project.metadata["id"]] = BatchJobs(item)
+        return batches[item.project.metadata["id"]]
 
     def project() -> Project:
         if current is None:
@@ -56,6 +70,12 @@ def project_routes(initial: Path | None = None) -> APIRouter:
     @router.post("/project/open")
     def open_project(body: OpenProject):
         nonlocal current
+        if any(s.active for s in services.values()) or any(
+            any(j["status"] == "running" for j in b.records.values()) for b in batches.values()
+        ):
+            raise ValueError(
+                "Wait for inference or cancel the running batch before changing projects"
+            )
         replacement = Project(Path(body.path))
         current = replacement
         return {**current.metadata, "root": str(current.root), "image_count": len(current.entries)}
@@ -153,7 +173,7 @@ def project_routes(initial: Path | None = None) -> APIRouter:
         output = export_project(project(), body.task, body.format, body.include_pending)
         return {
             "path": str(output),
-            "report": __import__("json").loads((output / "report.json").read_text()),
+            "report": json.loads((output / "report.json").read_text()),
         }
 
     @router.post("/trash/excluded")
@@ -170,43 +190,46 @@ def project_routes(initial: Path | None = None) -> APIRouter:
         item = service()
         return item.executor.submit(item.process, image_id, body).result()
 
+    @router.get("/jobs")
+    def list_jobs():
+        return list(batch().records.values())
+
     @router.post("/jobs")
     def create_job(body: SegmentRequest):
-        item = service()
-        job_id = uid()
-        job = {
-            "id": job_id,
-            "status": "running",
-            "completed": 0,
-            "failed": [],
-            "total": len(item.project.entries),
-            "cancel": False,
-        }
-        item.jobs[job_id] = job
+        return batch().start(body)
 
-        def run():
-            for image_id in list(item.project.entries):
-                if job["cancel"]:
-                    break
-                try:
-                    item.executor.submit(item.process, image_id, body).result()
-                except Exception as error:
-                    job["failed"].append({"image": image_id, "error": str(error)})
-                job["completed"] += 1
-            job["status"] = "cancelled" if job["cancel"] else "complete"
-
-        threading.Thread(target=run, daemon=True).start()
-        return job
+    @router.post("/jobs/{job_id}/resume")
+    def resume_job(job_id: str):
+        item = batch()
+        return item.start(SegmentRequest.model_validate(item.records[job_id]["request"]), job_id)
 
     @router.get("/jobs/{job_id}")
     def get_job(job_id: str):
-        return service().jobs[job_id]
+        return batch().records[job_id]
 
     @router.delete("/jobs/{job_id}")
     def cancel_job(job_id: str):
-        job = service().jobs[job_id]
-        job["cancel"] = True
-        return job
+        return batch().cancel(job_id)
+
+    @router.get("/images/{image_id}/masks/{instance_id}")
+    def mask_image(image_id: str, instance_id: str):
+        item = project()
+        annotation = item.annotation(image_id)
+        obj = next((o for o in annotation.instances if o.id == instance_id), None)
+        if obj is None or not obj.mask:
+            raise KeyError("No mask")
+        binary = decode_mask(obj.mask)
+        color = next(
+            (c["color"] for c in item.metadata["classes"] if c["id"] == obj.class_id), "#657286"
+        )
+        rgba = np.zeros((*binary.shape, 4), dtype=np.uint8)
+        rgba[:, :, :3] = [int(color[i : i + 2], 16) for i in (1, 3, 5)]
+        rgba[:, :, 3] = binary * 110
+        output = io.BytesIO()
+        Image.fromarray(rgba).save(output, format="PNG")
+        return Response(
+            output.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"}
+        )
 
     # Keep access local to this application instance rather than a module global.
     router.project = project

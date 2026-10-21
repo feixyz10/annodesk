@@ -1,0 +1,131 @@
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
+import { instance, request, type Annotation, type ProjectMeta } from "../api";
+import { useProject } from "./project";
+vi.mock("../api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api")>()),
+  request: vi.fn(),
+}));
+const mock = vi.mocked(request);
+function ann(): Annotation {
+  return {
+    revision: 0,
+    instances: [instance("c", [1, 1, 8, 8])],
+    detection_review: "ok",
+    segmentation_review: "ok",
+    excluded: false,
+    tags: [],
+    notes: "",
+    explicit_empty: {},
+    width: 10,
+    height: 10,
+  };
+}
+function metadata(id = "p"): ProjectMeta {
+  return {
+    id,
+    root: "/tmp/" + id,
+    classes: [{ id: id + "c", index: 0, name: "Object", color: "#26835d" }],
+    tags: [],
+    image_count: 2,
+  };
+}
+function initialized() {
+  const s = useProject();
+  s.meta = metadata();
+  s.current = { id: "a", path: "a.png" };
+  s.annotation = ann();
+  s.images = [s.current, { id: "b", path: "b.png" }];
+  return s;
+}
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+beforeEach(() => {
+  setActivePinia(createPinia());
+  mock.mockReset();
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+});
+describe("annotation concurrency", () => {
+  it("does not apply image A inference to image B", async () => {
+    const s = initialized(),
+      pending = deferred<Annotation>();
+    mock.mockImplementation(async (path) =>
+      path.endsWith("/segment") ? await pending.promise : ann(),
+    );
+    const run = s.segment();
+    await Promise.resolve();
+    await Promise.resolve();
+    await s.load(s.images[1]);
+    const before = JSON.stringify(s.annotation);
+    pending.resolve({ ...ann(), instances: [], revision: 1 });
+    await run;
+    expect(s.current?.id).toBe("b");
+    expect(JSON.stringify(s.annotation)).toBe(before);
+  });
+  it("preserves edits made while inference was in flight", async () => {
+    const s = initialized(),
+      pending = deferred<Annotation>();
+    mock.mockImplementation(async (path) =>
+      path.endsWith("/segment") ? await pending.promise : ann(),
+    );
+    const run = s.segment();
+    await Promise.resolve();
+    await Promise.resolve();
+    s.annotation!.notes = "new notes";
+    s.changed();
+    pending.resolve({ ...ann(), notes: "old notes", revision: 1 });
+    await run;
+    expect(s.annotation!.notes).toBe("new notes");
+  });
+  it("flushes outgoing edits again before replacing after navigation GET", async () => {
+    const s = initialized(),
+      pending = deferred<Annotation>();
+    mock.mockImplementation(async (path, method) =>
+      method === "PUT" ? { ...ann(), revision: 1 } : await pending.promise,
+    );
+    const load = s.load(s.images[1]);
+    await Promise.resolve();
+    await Promise.resolve();
+    s.annotation!.notes = "late outgoing edit";
+    s.changed();
+    pending.resolve(ann());
+    await load;
+    expect(
+      mock.mock.calls.some(
+        ([path, method, body]) =>
+          path === "/images/a/annotation" &&
+          method === "PUT" &&
+          (body as Annotation).notes === "late outgoing edit",
+      ),
+    ).toBe(true);
+  });
+  it("invalidates both approved tasks when a shared class changes", () => {
+    const s = initialized();
+    s.selected = s.annotation!.instances[0].id;
+    s.assign("new");
+    expect(s.annotation!.detection_review).toBe("pending");
+    expect(s.annotation!.segmentation_review).toBe("pending");
+  });
+  it("resets the default class when the project changes", async () => {
+    const s = initialized();
+    s.defaultClass = "old";
+    mock.mockImplementation(async (path) =>
+      path === "/project"
+        ? metadata("new")
+        : path.startsWith("/images?")
+          ? { items: [], total: 0 }
+          : {},
+    );
+    await s.open("/new");
+    expect(s.defaultClass).toBe("newc");
+  });
+});

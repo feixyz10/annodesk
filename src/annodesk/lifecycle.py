@@ -24,6 +24,8 @@ def reindex_classes(project: Project, order: list[str] | None = None) -> dict:
             next(c["index"] for c in categories if c["id"] == key): i for i, key in enumerate(order)
         }
         annotations = {image_id: project.annotation(image_id) for image_id in project.entries}
+        for image_id in annotations:
+            project.validate_fingerprints(image_id)
         outputs = {}
         for image_id, annotation in annotations.items():
             hashes = []
@@ -33,7 +35,7 @@ def reindex_classes(project: Project, order: list[str] | None = None) -> dict:
                 lines = []
                 for line in text.splitlines():
                     if line.strip():
-                        head, _, tail = line.partition(" ")
+                        head, tail = line.split(maxsplit=1)
                         lines.append(f"{mapping[int(head)]} {tail}\n")
                 changed = "".join(lines)
                 outputs[path] = changed

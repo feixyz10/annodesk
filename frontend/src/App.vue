@@ -137,6 +137,7 @@ async function tags(value: string) {
 }
 function key(e: KeyboardEvent) {
   if (
+    store.navigating ||
     e.isComposing ||
     (e.target as HTMLElement).closest(
       "input,textarea,select,[contenteditable=true]",
@@ -196,6 +197,68 @@ function key(e: KeyboardEvent) {
       t: "text",
     }[k]!;
 }
+async function exportCurrent() {
+  try {
+    await store.save();
+    const r = await request<{ path: string }>("/export", "POST", {
+      task: store.task,
+    });
+    store.error = "Export saved on backend: " + r.path;
+  } catch (e) {
+    store.error = String(e);
+  }
+}
+async function reindex() {
+  try {
+    await store.save();
+    await request("/classes/reindex", "POST", {});
+    await store.refresh();
+    if (store.current) await store.load(store.current);
+  } catch (e) {
+    store.error = String(e);
+  }
+}
+const jobsOpen = ref(false),
+  jobs = ref<
+    Array<{
+      id: string;
+      status: string;
+      completed: number;
+      skipped: number;
+      total: number;
+      failed: Array<{ image: string; error: string }>;
+    }>
+  >([]);
+let jobsTimer: ReturnType<typeof setInterval>;
+async function refreshJobs() {
+  if (!jobsOpen.value || !store.meta) return;
+  try {
+    jobs.value = await request("/jobs");
+  } catch (e) {
+    store.error = String(e);
+  }
+}
+async function startBatch() {
+  try {
+    await store.save();
+    await request("/jobs", "POST", { model: store.model });
+    jobsOpen.value = true;
+    await refreshJobs();
+  } catch (e) {
+    store.error = String(e);
+  }
+}
+async function jobAction(id: string, resume = false) {
+  try {
+    await request(
+      "/jobs/" + id + (resume ? "/resume" : ""),
+      resume ? "POST" : "DELETE",
+    );
+    await refreshJobs();
+  } catch (e) {
+    store.error = String(e);
+  }
+}
 function createClass() {
   const name = window.prompt("New class name");
   if (name) void store.addClass(name);
@@ -208,6 +271,7 @@ function unload(e: BeforeUnloadEvent) {
 }
 onMounted(async () => {
   await configureApi();
+  jobsTimer = setInterval(() => void refreshJobs(), 1000);
   try {
     await store.refresh();
     if (store.images[0]) await store.load(store.images[0]);
@@ -218,13 +282,14 @@ onMounted(async () => {
   window.addEventListener("beforeunload", unload);
 });
 onBeforeUnmount(() => {
+  clearInterval(jobsTimer);
   window.removeEventListener("keydown", key);
   window.removeEventListener("beforeunload", unload);
 });
 </script>
 <template>
   <NConfigProvider
-    ><div class="app">
+    ><div class="app" :inert="store.navigating">
       <header>
         <strong class="brand">AnnoDesk</strong
         ><button
@@ -246,24 +311,8 @@ onBeforeUnmount(() => {
           @click="store.segment(true)"
         >
           Segment current</button
-        ><button
-          :disabled="!store.meta"
-          @click="
-            request('/jobs', 'POST', { model: store.model }).catch(
-              (e) => (store.error = String(e)),
-            )
-          "
-        >
-          Batch…</button
-        ><button
-          :disabled="!store.meta"
-          @click="
-            request<{ path: string }>('/export', 'POST', { task: store.task })
-              .then((r) => (store.error = 'Export saved on backend: ' + r.path))
-              .catch((e) => (store.error = String(e)))
-          "
-        >
-          Export</button
+        ><button :disabled="!store.meta" @click="startBatch">Batch…</button
+        ><button :disabled="!store.meta" @click="exportCurrent">Export</button
         ><button title="Keyboard shortcuts · ?" @click="help = true">
           Shortcuts ?
         </button>
@@ -549,6 +598,34 @@ onBeforeUnmount(() => {
           <NButton type="primary" @click="openProject">Open</NButton>
         </div></NModal
       >
+      <NDrawer v-model:show="jobsOpen" :width="440"
+        ><NDrawerContent title="Batch segmentation" closable
+          ><p>Completed images remain saved if this page disconnects.</p>
+          <section v-for="job in jobs" :key="job.id" class="section">
+            <strong>{{ job.status }}</strong>
+            <p>
+              {{ job.completed }} / {{ job.total }} processed ·
+              {{ job.skipped }} skipped · {{ job.failed.length }} failed
+            </p>
+            <progress
+              :value="job.completed"
+              :max="job.total"
+              style="width: 100%"
+            ></progress
+            ><button v-if="job.status === 'running'" @click="jobAction(job.id)">
+              Cancel after current image</button
+            ><button
+              v-else-if="job.status !== 'complete'"
+              @click="jobAction(job.id, true)"
+            >
+              Resume
+            </button>
+            <p v-for="failure in job.failed.slice(-3)" class="muted">
+              {{ failure.error }}
+            </p>
+          </section></NDrawerContent
+        ></NDrawer
+      >
       <NDrawer v-model:show="classesOpen" :width="390"
         ><NDrawerContent title="Project classes" closable
           ><p>
@@ -562,15 +639,7 @@ onBeforeUnmount(() => {
             /><span>ID {{ c.index }}</span>
           </div>
           <button @click="createClass">Add class</button
-          ><button
-            @click="
-              request('/classes/reindex', 'POST', {})
-                .then(() => store.refresh())
-                .catch((e) => (store.error = String(e)))
-            "
-          >
-            Reindex IDs…
-          </button></NDrawerContent
+          ><button @click="reindex">Reindex IDs…</button></NDrawerContent
         ></NDrawer
       >
       <NDrawer v-model:show="tagsOpen" :width="390"
