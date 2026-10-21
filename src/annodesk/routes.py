@@ -4,6 +4,7 @@ import hashlib
 import io
 import threading
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, Response
@@ -12,11 +13,22 @@ from pydantic import BaseModel, Field
 
 from annodesk.domain import Annotation, uid
 from annodesk.inference import SegmentationService, SegmentRequest
+from annodesk.lifecycle import export_project, reindex_classes, restore_trash, trash_excluded
 from annodesk.storage import Project
 
 
 class OpenProject(BaseModel):
     path: str
+
+
+class ExportInput(BaseModel):
+    task: Literal["detection", "segmentation"] = "segmentation"
+    format: Literal["yolo", "coco"] = "yolo"
+    include_pending: bool = False
+
+
+class ReindexInput(BaseModel):
+    order: list[str] | None = None
 
 
 class CategoryInput(BaseModel):
@@ -131,6 +143,27 @@ def project_routes(initial: Path | None = None) -> APIRouter:
                 category["color"] = body.color
             item.write_metadata()
             return category
+
+    @router.post("/classes/reindex")
+    def reindex(body: ReindexInput):
+        return reindex_classes(project(), body.order)
+
+    @router.post("/export")
+    def export(body: ExportInput):
+        output = export_project(project(), body.task, body.format, body.include_pending)
+        return {
+            "path": str(output),
+            "report": __import__("json").loads((output / "report.json").read_text()),
+        }
+
+    @router.post("/trash/excluded")
+    def trash():
+        return {"operation": trash_excluded(project())}
+
+    @router.post("/trash/{operation}/restore")
+    def restore(operation: str):
+        restore_trash(project(), operation)
+        return {"restored": True}
 
     @router.post("/images/{image_id}/segment")
     def segment(image_id: str, body: SegmentRequest):

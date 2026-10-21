@@ -10,6 +10,7 @@ from pathlib import Path
 import yaml
 from PIL import Image
 
+from annodesk.colors import choose_color
 from annodesk.domain import Annotation, Instance, uid
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
@@ -285,7 +286,7 @@ class Project:
             categories = self.metadata["tags" if tag else "classes"]
             if any(c["name"] == name for c in categories):
                 raise ValueError("Name already exists")
-            item = {"id": uid(), "name": name, "color": color or default_color(len(categories))}
+            item = {"id": uid(), "name": name, "color": color or choose_color(categories)}
             if not tag:
                 item["index"] = max((c["index"] for c in categories), default=-1) + 1
             categories.append(item)
