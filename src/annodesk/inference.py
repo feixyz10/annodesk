@@ -141,7 +141,27 @@ class UltralyticsAdapter:
                     event_type="model_ready",
                 )
 
-    def _predict(self, path, weights, backend, box, points, text):
+    def predict_candidates(self, path, model, box, points):
+        entry = self.registry.entry(model, "segmentation")
+        try:
+            with offline_inference():
+                result = self._predict(
+                    path,
+                    self.registry.weights(model),
+                    entry.backend,
+                    box,
+                    points,
+                    "",
+                    candidates=True,
+                )
+                self.loaded_id = entry.id
+                return result
+        except (RuntimeError, ImportError, OSError, TypeError) as error:
+            raise ValueError(
+                f"Local model {entry.id} candidate inference failed: {error}"
+            ) from error
+
+    def _predict(self, path, weights, backend, box, points, text, *, candidates=False):
         self._load(weights, backend, text)
         image_key = (str(path), path.stat().st_mtime_ns, path.stat().st_size)
         if image_key != self.image_key:
@@ -156,7 +176,23 @@ class UltralyticsAdapter:
                 "labels": [int(p.positive) for p in points] or None,
             }
         )
-        results = self.predictor(**prompts)
+        # This is an inference argument, not an Ultralytics config override.
+        # Semantic text segmentation is a separate multi-object pipeline.
+        results = self.predictor(**prompts, **({} if text else {"multimask_output": candidates}))
+        if candidates:
+            output = []
+            for result in results:
+                if result.masks is None:
+                    continue
+                scores = result.boxes.conf.cpu().tolist() if result.boxes is not None else []
+                for index, mask in enumerate(result.masks.data):
+                    output.append(
+                        (
+                            mask.cpu().numpy().astype(np.uint8),
+                            scores[index] if index < len(scores) else None,
+                        )
+                    )
+            return output
         return [
             mask.cpu().numpy().astype(np.uint8)
             for result in results
@@ -219,6 +255,17 @@ class SegmentationService:
 
                 body = prepare_detection(self.project, body, self.adapter.load(body.model))
             return self._process(image_id, body)
+        finally:
+            self.active = False
+
+    def candidates(self, image_id, body):
+        from annodesk.candidates import preview_candidates
+
+        self.active = True
+        try:
+            configured = self.configure(body)
+            body = body.model_copy(update={"model": configured.model})
+            return preview_candidates(self.project, image_id, body, self.adapter)
         finally:
             self.active = False
 

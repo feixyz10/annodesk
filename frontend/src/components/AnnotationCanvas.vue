@@ -16,6 +16,9 @@ let stage: Konva.Stage,
   transformer: Konva.Transformer;
 const maskCache = new Map<string, HTMLImageElement>(),
   loadingMasks = new Set<string>();
+let fitted = true;
+let candidateImage: HTMLImageElement | null = null;
+let candidateImageKey = "";
 let lastSelection = { id: "", time: 0 };
 function selectObject(id: string) {
   if (store.tool !== "select") return;
@@ -26,7 +29,9 @@ function selectObject(id: string) {
   if (twice) store.openClassPicker();
 }
 function fit() {
-  if (!stage || !store.annotation) return;
+  if (!stage || !store.annotation || stage.width() <= 0 || stage.height() <= 0)
+    return;
+  fitted = true;
   const a = store.annotation;
   const scale =
     Math.min(stage.width() / a.width, stage.height() / a.height) * 0.94;
@@ -40,6 +45,7 @@ function fit() {
 }
 function zoom(factor: number, at?: { x: number; y: number }) {
   if (!stage) return;
+  fitted = false;
   const point = at ?? { x: stage.width() / 2, y: stage.height() / 2 },
     old = stage.scaleX(),
     scale = Math.max(0.05, Math.min(32, old * factor));
@@ -78,7 +84,19 @@ function draw() {
     const color =
       store.meta?.classes.find((c) => c.id === object.class_id)?.color ??
       "#657286";
-    if (object.mask && store.current) {
+    const previewing = !!(
+      store.candidate && store.candidates?.response?.instance_id === object.id
+    );
+    if (previewing && candidateImage)
+      layer.add(
+        new Konva.Image({
+          image: candidateImage,
+          width: a.width,
+          height: a.height,
+          listening: false,
+        }),
+      );
+    if (!previewing && object.mask && store.current) {
       const imageId = store.current.id,
         key = imageId + object.id + a.revision + color;
       const cached = maskCache.get(key);
@@ -111,11 +129,13 @@ function draw() {
         };
       }
     }
-    for (const points of object.polygons) {
+    for (const points of previewing
+      ? store.candidate!.polygons
+      : object.polygons) {
       const shape = new Konva.Line({
         points: points.flat(),
         closed: true,
-        fill: object.mask ? "rgba(0,0,0,0.001)" : color + "55",
+        fill: object.mask || previewing ? "rgba(0,0,0,0.001)" : color + "55",
         stroke: color,
         strokeWidth: 1.5,
         strokeScaleEnabled: false,
@@ -202,8 +222,12 @@ function draw() {
 }
 function key(e: KeyboardEvent) {
   if (
+    e.isComposing ||
+    e.ctrlKey ||
+    e.metaKey ||
+    e.altKey ||
     (e.target as HTMLElement).closest(
-      "input,textarea,select,button,[role=dialog],[contenteditable=true]",
+      "input,textarea,select,button,[role=dialog],[contenteditable=true],.mask-candidates",
     )
   )
     return;
@@ -228,11 +252,22 @@ onMounted(() => {
   layer = new Konva.Layer();
   stage.add(layer);
   observer = new ResizeObserver(() => {
-    stage.size({
-      width: host.value!.clientWidth,
-      height: host.value!.clientHeight,
-    });
-    draw();
+    const previous = stage.size();
+    const width = host.value!.clientWidth,
+      height = host.value!.clientHeight;
+    stage.size({ width, height });
+    if (fitted) fit();
+    else {
+      // Keep the same world point at the view center when panels resize.
+      stage.position({
+        x: stage.x() + (width - previous.width) / 2,
+        y: stage.y() + (height - previous.height) / 2,
+      });
+      draw();
+    }
+  });
+  stage.on("dragend", (event) => {
+    if (event.target === stage) fitted = false;
   });
   observer.observe(host.value!);
   stage.on("wheel", (e) => {
@@ -323,6 +358,28 @@ async function loadImage() {
     store.error = "Could not load image";
   }
 }
+watch(
+  () => store.candidate?.overlay,
+  async (source) => {
+    candidateImage = null;
+    candidateImageKey = source || "";
+    draw();
+    if (!source) return;
+    const image = new Image();
+    image.src = source;
+    try {
+      await image.decode();
+      if (candidateImageKey !== source) return;
+      candidateImage = image;
+      draw();
+    } catch {
+      if (candidateImageKey === source) {
+        store.cancelCandidates();
+        store.error = "Could not load candidate preview";
+      }
+    }
+  },
+);
 watch(() => store.current?.id, loadImage);
 watch(() => [store.annotation, store.selected, store.meta], draw, {
   deep: true,
@@ -335,6 +392,8 @@ watch(
   },
 );
 onBeforeUnmount(() => {
+  candidateImageKey = "";
+  candidateImage = null;
   observer?.disconnect();
   stage?.destroy();
   window.removeEventListener("keydown", key);

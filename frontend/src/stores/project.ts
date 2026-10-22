@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, watch, onScopeDispose } from "vue";
 import {
   request,
   type Annotation,
@@ -9,6 +9,7 @@ import {
   type ModelsConfig,
   type Operation,
   type ModelParameters,
+  type MaskCandidates,
 } from "../api";
 
 export const useProject = defineStore("project", () => {
@@ -119,6 +120,244 @@ export const useProject = defineStore("project", () => {
   const object = computed(() =>
     annotation.value?.instances.find((i) => i.id === selected.value),
   );
+  interface CandidateSession {
+    phase: "loading" | "ready" | "error" | "applying";
+    response: MaskCandidates | null;
+    active: number;
+    error: string;
+    promptKey: string;
+    annotationKey: string;
+  }
+  const candidates = ref<CandidateSession | null>(null),
+    candidateNotice = ref("");
+  let candidateGeneration = 0,
+    candidateFlight = false,
+    candidateQueued = false;
+  let candidateTimer: ReturnType<typeof setTimeout> | undefined;
+  let candidateNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+  const canGenerateCandidates = computed(
+    () =>
+      !!(
+        object.value &&
+        !object.value.locked &&
+        !object.value.hidden &&
+        !annotation.value?.excluded &&
+        (object.value.box ||
+          object.value.prompt_box ||
+          object.value.points.length) &&
+        tool.value !== "text" &&
+        models.value?.models.some(
+          (m) => m.id === model.value && m.available && m.mask_candidates,
+        )
+      ),
+  );
+  const candidate = computed(
+    () => candidates.value?.response?.items[candidates.value.active],
+  );
+  function promptKey() {
+    const obj = object.value;
+    return JSON.stringify(obj && [obj.box, obj.prompt_box, obj.points]);
+  }
+  function annotationKey() {
+    return JSON.stringify({ ...annotation.value, revision: 0 });
+  }
+  function cancelCandidates(notify = false) {
+    if (notify && candidates.value) {
+      candidateNotice.value =
+        "Candidate preview discarded; the original annotation was kept.";
+      clearTimeout(candidateNoticeTimer);
+      candidateNoticeTimer = setTimeout(() => {
+        candidateNotice.value = "";
+      }, 5000);
+    }
+    candidateGeneration++;
+    clearTimeout(candidateTimer);
+    candidateQueued = false;
+    candidates.value = null;
+  }
+  async function generateCandidates(regenerate = false) {
+    if (
+      !canGenerateCandidates.value ||
+      !current.value ||
+      !annotation.value ||
+      !object.value
+    )
+      return;
+    if (!regenerate || !candidates.value) {
+      cancelCandidates();
+      candidates.value = {
+        phase: "loading",
+        response: null,
+        active: 0,
+        error: "",
+        promptKey: promptKey(),
+        annotationKey: annotationKey(),
+      };
+    }
+    if (candidateFlight) {
+      candidateQueued = true;
+      return;
+    }
+    const session = candidates.value!;
+    const token = ++candidateGeneration;
+    const imageId = current.value.id,
+      projectId = meta.value?.id,
+      instanceId = object.value.id;
+    session.phase = "loading";
+    session.response = null;
+    session.error = "";
+    candidateFlight = true;
+    try {
+      await save();
+      if (candidateGeneration !== token || candidates.value !== session) return;
+      const revision = annotation.value!.revision;
+      const result = await request<MaskCandidates>(
+        `/images/${imageId}/mask-candidates`,
+        "POST",
+        {
+          ...parameters("segmentation"),
+          instance_id: instanceId,
+          expected_revision: revision,
+          project_id: projectId,
+        },
+      );
+      if (
+        candidateGeneration !== token ||
+        current.value?.id !== imageId ||
+        meta.value?.id !== projectId ||
+        selected.value !== instanceId
+      )
+        return;
+      if (
+        result.revision !== annotation.value?.revision ||
+        result.project_id !== projectId ||
+        result.image_id !== imageId ||
+        result.instance_id !== instanceId ||
+        !result.items.length
+      ) {
+        throw new Error("The annotation changed; generate candidates again.");
+      }
+      session.response = result;
+      session.active = 0;
+      session.phase = "ready";
+    } catch (e) {
+      if (candidateGeneration === token && candidates.value === session) {
+        session.phase = "error";
+        session.error = String(e);
+      }
+    } finally {
+      candidateFlight = false;
+      if (candidateQueued && candidates.value) {
+        candidateQueued = false;
+        void generateCandidates(true);
+      }
+    }
+  }
+  async function applyCandidate() {
+    const session = candidates.value,
+      preview = session?.response,
+      chosen = candidate.value;
+    if (
+      !preview ||
+      !chosen ||
+      session?.phase !== "ready" ||
+      !current.value ||
+      !annotation.value
+    )
+      return;
+    const imageId = current.value.id,
+      projectId = meta.value?.id;
+    session.phase = "applying";
+    try {
+      await save();
+      if (candidates.value !== session) return;
+      if (annotation.value?.revision !== preview.revision)
+        throw new Error("The annotation changed; generate candidates again.");
+      const captured = version;
+      const updated = await request<Annotation>(
+        `/images/${imageId}/mask-candidates/apply`,
+        "POST",
+        {
+          project_id: preview.project_id,
+          instance_id: preview.instance_id,
+          revision: preview.revision,
+          image_stamp: preview.image_stamp,
+          model: preview.model,
+          mask: chosen.mask,
+        },
+      );
+      if (current.value?.id !== imageId || meta.value?.id !== projectId) return;
+      if (version !== captured) {
+        error.value =
+          "Processing finished after newer edits. Your edits were kept; reload to reconcile.";
+        return;
+      }
+      checkpoint();
+      cancelCandidates();
+      annotation.value = { ...annotation.value!, ...updated };
+      error.value = "";
+    } catch (e) {
+      if (candidates.value === session) {
+        session.phase = "error";
+        session.response = null;
+        session.error = String(e);
+      }
+    }
+  }
+  watch(
+    () =>
+      JSON.stringify([
+        current.value?.id,
+        meta.value?.id,
+        selected.value,
+        task.value,
+        JSON.stringify(parameters("segmentation")),
+        JSON.stringify(meta.value?.classes),
+        JSON.stringify(models.value?.models.find((m) => m.id === model.value)),
+        tool.value === "text",
+      ]),
+    () => cancelCandidates(),
+    { flush: "sync" },
+  );
+  watch(
+    () => (candidates.value ? annotationKey() : ""),
+    (key) => {
+      const session = candidates.value;
+      if (!session || key === session.annotationKey) return;
+      if (
+        promptKey() !== session.promptKey &&
+        canGenerateCandidates.value &&
+        session.phase !== "applying"
+      ) {
+        session.promptKey = promptKey();
+        session.annotationKey = key;
+        session.phase = "loading";
+        session.response = null;
+        session.error = "";
+        candidateGeneration++;
+        candidateQueued = false;
+        clearTimeout(candidateTimer);
+        candidateTimer = setTimeout(() => void generateCandidates(true), 500);
+      } else cancelCandidates();
+    },
+    { flush: "pre" },
+  );
+  watch(
+    () => annotation.value?.revision,
+    (revision) => {
+      if (
+        candidates.value?.phase === "ready" &&
+        candidates.value.response?.revision !== revision
+      )
+        cancelCandidates();
+    },
+    { flush: "sync" },
+  );
+  onScopeDispose(() => {
+    clearTimeout(candidateTimer);
+    clearTimeout(candidateNoticeTimer);
+    cancelCandidates();
+  });
   function checkpoint() {
     if (annotation.value) {
       history.value.push(JSON.stringify(annotation.value));
@@ -178,6 +417,7 @@ export const useProject = defineStore("project", () => {
   }
   async function load(image: ImageItem) {
     if (navigating.value) return;
+    cancelCandidates(true);
     navigating.value = true;
     try {
       await save();
@@ -235,6 +475,7 @@ export const useProject = defineStore("project", () => {
       defaultClass.value = meta.value.classes[0]?.id ?? null;
   }
   async function open(path: string) {
+    cancelCandidates(true);
     try {
       await save();
       await request("/project/open", "POST", { path });
@@ -287,12 +528,43 @@ export const useProject = defineStore("project", () => {
     const stack = redo ? future.value : history.value,
       other = redo ? history.value : future.value;
     if (!stack.length) return;
+    const before = taskGeometry(annotation.value);
     other.push(JSON.stringify(annotation.value));
     const revision = annotation.value.revision;
     annotation.value = JSON.parse(stack.pop()!);
     annotation.value!.revision = revision;
     selected.value = null;
-    changed(true);
+    const after = taskGeometry(annotation.value!);
+    const detectionChanged = before[0] !== after[0],
+      segmentationChanged = before[1] !== after[1];
+    changed(
+      detectionChanged && segmentationChanged
+        ? true
+        : detectionChanged
+          ? "detection"
+          : segmentationChanged
+            ? "segmentation"
+            : false,
+    );
+  }
+  function taskGeometry(value: Annotation) {
+    return [
+      JSON.stringify([
+        value.excluded,
+        value.instances.map((o) => [o.id, o.class_id, o.box]),
+      ]),
+      JSON.stringify([
+        value.excluded,
+        value.instances.map((o) => [
+          o.id,
+          o.class_id,
+          o.mask,
+          o.polygons,
+          o.prompt_box,
+          o.points,
+        ]),
+      ]),
+    ];
   }
   function move(delta: number) {
     const index = filtered.value.findIndex((i) => i.id === current.value?.id);
@@ -300,6 +572,7 @@ export const useProject = defineStore("project", () => {
     if (next) void load(next);
   }
   async function segment(onlyMissing = false, text = "") {
+    cancelCandidates();
     if (!annotation.value || !current.value) return;
     try {
       await save();
@@ -334,6 +607,7 @@ export const useProject = defineStore("project", () => {
     recalculate = false,
   ) {
     if (!annotation.value || !current.value) return;
+    cancelCandidates();
     try {
       await save();
       const imageId = current.value!.id,
@@ -387,6 +661,13 @@ export const useProject = defineStore("project", () => {
       annotation.value = updated;
   }
   return {
+    candidates,
+    candidate,
+    candidateNotice,
+    canGenerateCandidates,
+    generateCandidates,
+    cancelCandidates,
+    applyCandidate,
     meta,
     images,
     current,

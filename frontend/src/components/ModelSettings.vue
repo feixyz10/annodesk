@@ -164,6 +164,13 @@ async function apply() {
         )
       }}
     </p>
+    <p v-if="mode === 'segmentation' && chosen?.mask_candidates" class="muted">
+      {{
+        t(
+          "Point/box mask candidates are available interactively. Batch processing always uses a single mask.",
+        )
+      }}
+    </p>
     <div class="model-actions">
       <button :disabled="!!busy" @click="store.refreshModels()">
         {{ t("Reload configuration") }}</button

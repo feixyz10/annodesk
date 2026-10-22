@@ -104,6 +104,8 @@ def run_batch(
         persist()
 
     try:
+        if body.operation == "segmentation" and body.text:
+            raise ValueError("Batch segmentation only supports single masks from existing boxes")
         # Resolve before preflight so invalid configuration never mutates labels.
         geometry = body.operation == "boxes_from_masks"
         if geometry:

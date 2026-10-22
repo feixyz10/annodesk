@@ -137,6 +137,7 @@ export interface ModelOption {
   path: string | null;
   error: string | null;
   text_prompts: boolean;
+  mask_candidates?: boolean;
 }
 export interface ModelsConfig {
   config: string;
@@ -145,4 +146,20 @@ export interface ModelsConfig {
   loaded_model?: string;
   loaded_device?: string;
   models: ModelOption[];
+}
+
+export interface MaskCandidate {
+  mask: unknown;
+  polygons: number[][][];
+  quality: number | null;
+  overlay: string;
+}
+export interface MaskCandidates {
+  project_id: string;
+  image_id: string;
+  instance_id: string;
+  revision: number;
+  image_stamp: string;
+  model: string;
+  items: MaskCandidate[];
 }

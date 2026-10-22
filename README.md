@@ -23,6 +23,12 @@ localized controls and tooltips, and bilingual layout adjustments. UI messages l
 `frontend/src/i18n.ts` and `frontend/src/locales/zh-CN.json`; project data and raw logs retain
 their original values. Translation coverage and placeholder tests run with the frontend suite.
 
+Version 0.5.0 adds on-demand interactive mask candidates; see the [candidate spec](docs/specs/mask-candidates.md).
+Proposals are stateless, read-only previews; an explicit selection is applied through the
+existing journaled save with revision and image fingerprint checks. Batch and automatic
+segmentation remain single-mask operations. Candidate quality uses the predictor's score,
+not detection confidence; semantic text segmentation remains a separate multi-object path.
+
 Read [AGENTS.md](AGENTS.md) for contributor conventions. The execution layer is
 covered by actual spawn tests with synthetic adapters, including the single-writer
 commit path; actual checkpoints,
@@ -81,7 +87,7 @@ Exports remain directory exports (no archive or browser upload/download of datas
 Tasks opens automatically when a task starts; closing it leaves a compact toolbar
 progress indicator without occupying canvas space. Logs is independent of an open project.
 
-Python/version metadata and frontend package versions are 0.4.0. This source version
+Python/version metadata and frontend package versions are 0.5.0. This source version
 has not been published by a build or commit; publication remains a separate action.
 
 Detection adapters return candidates without project access; `operations.py` validates

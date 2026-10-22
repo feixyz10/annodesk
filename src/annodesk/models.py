@@ -170,6 +170,7 @@ class ModelRegistry:
                     "path": resolved,
                     "error": error,
                     "text_prompts": entry.backend == "sam3",
+                    "mask_candidates": entry.task == "segmentation",
                 }
             )
         return {

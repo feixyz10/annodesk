@@ -242,3 +242,176 @@ describe("assisted annotation", () => {
     expect(s.error).toContain("newer edits");
   });
 });
+
+describe("mask candidates", () => {
+  function ready() {
+    const s = initialized();
+    s.model = "sam";
+    s.selected = s.annotation!.instances[0].id;
+    s.models = {
+      config: "/models.json",
+      default_model: "sam",
+      models: [
+        {
+          id: "sam",
+          name: "SAM",
+          backend: "sam2",
+          task: "segmentation",
+          available: true,
+          path: "/model",
+          error: null,
+          text_prompts: false,
+          mask_candidates: true,
+        },
+      ],
+    };
+    return s;
+  }
+  function proposal(
+    s: ReturnType<typeof useProject>,
+    revision = s.annotation!.revision,
+  ) {
+    return {
+      project_id: "p",
+      image_id: "a",
+      instance_id: s.selected!,
+      revision,
+      image_stamp: "1790000000000000000:42",
+      model: "sam",
+      items: [
+        {
+          mask: { size: [10, 10], counts: "first" },
+          polygons: [],
+          quality: 0.96,
+          overlay: "data:image/png;base64,first",
+        },
+        {
+          mask: { size: [10, 10], counts: "second" },
+          polygons: [],
+          quality: 0.85,
+          overlay: "data:image/png;base64,second",
+        },
+      ],
+    };
+  }
+  async function flush() {
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+  }
+  it("keeps proposals transient and sends only the selected mask on Apply", async () => {
+    const s = ready(),
+      original = JSON.stringify(s.annotation);
+    mock.mockImplementation(async (path, method, body) => {
+      if (path.endsWith("/mask-candidates")) return proposal(s);
+      if (path.endsWith("/apply"))
+        return {
+          ...s.annotation!,
+          revision: 1,
+          segmentation_review: "pending",
+          instances: [
+            { ...s.object!, mask: (body as any).mask, source: "sam" },
+          ],
+        };
+      return ann();
+    });
+    await s.generateCandidates();
+    expect(s.candidates?.phase).toBe("ready");
+    expect(JSON.stringify(s.annotation)).toBe(original);
+    expect(s.dirty).toBe(false);
+    expect(s.history).toHaveLength(0);
+    s.candidates!.active = 1;
+    const expected = s.candidate!.mask;
+    await s.applyCandidate();
+    expect(
+      mock.mock.calls.find(([path]) => path.endsWith("/apply"))?.[2],
+    ).toMatchObject({ mask: expected });
+    expect(
+      mock.mock.calls.find(([path]) => path.endsWith("/apply"))?.[2],
+    ).not.toHaveProperty("items");
+    expect(s.object?.mask).toEqual(expected);
+    expect(s.annotation!.detection_review).toBe("ok");
+    expect(s.candidates).toBeNull();
+    s.undo();
+    expect(s.annotation!.instances[0].mask).toBeNull();
+    expect(s.annotation!.detection_review).toBe("ok");
+  });
+  it("ignores a late response after navigation and reports discarded preview", async () => {
+    const s = ready(),
+      pending = deferred<ReturnType<typeof proposal>>(),
+      response = proposal(s);
+    mock.mockImplementation(async (path) =>
+      path.endsWith("/mask-candidates") ? pending.promise : ann(),
+    );
+    const run = s.generateCandidates();
+    await flush();
+    await s.load(s.images[1]);
+    pending.resolve(response);
+    await run;
+    expect(s.current?.id).toBe("b");
+    expect(s.candidates).toBeNull();
+    expect(s.candidateNotice).toContain("discarded");
+    expect(s.annotation!.instances[0].mask).toBeNull();
+  });
+  it("coalesces prompt edits during inference and regenerates from saved prompts", async () => {
+    const s = ready(),
+      pending = deferred<ReturnType<typeof proposal>>(),
+      first = proposal(s);
+    let calls = 0;
+    mock.mockImplementation(async (path, method, body) => {
+      if (method === "PUT")
+        return {
+          ...(body as Annotation),
+          revision: s.annotation!.revision + 1,
+        };
+      if (path.endsWith("/mask-candidates")) {
+        calls++;
+        return calls === 1
+          ? pending.promise
+          : proposal(s, (body as any).expected_revision);
+      }
+      return ann();
+    });
+    const run = s.generateCandidates();
+    await flush();
+    for (let i = 0; i < 3; i++) {
+      s.object!.points.push({ x: i + 1, y: 2, positive: true });
+      s.changed("segmentation");
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    expect(calls).toBe(1);
+    pending.resolve(first);
+    await run;
+    await flush();
+    expect(calls).toBe(2);
+    expect(s.candidates?.phase).toBe("ready");
+    expect(s.candidates?.response?.revision).toBe(s.annotation!.revision);
+  });
+  it("cancels on annotation or model changes but tolerates unchanged metadata refreshes", async () => {
+    const s = ready();
+    mock.mockImplementation(async () => proposal(s));
+    await s.generateCandidates();
+    s.meta = JSON.parse(JSON.stringify(s.meta));
+    await flush();
+    expect(s.candidates?.phase).toBe("ready");
+    s.annotation!.notes = "human edit";
+    s.changed();
+    await flush();
+    expect(s.candidates).toBeNull();
+    s.dirty = false;
+    await s.generateCandidates();
+    s.model = "other";
+    expect(s.candidates).toBeNull();
+  });
+  it("does not replace existing masks on a failed Apply", async () => {
+    const s = ready();
+    const original = JSON.stringify(s.annotation);
+    mock.mockImplementation(async (path) => {
+      if (path.endsWith("/apply")) throw new Error("Revision conflict");
+      return proposal(s);
+    });
+    await s.generateCandidates();
+    await s.applyCandidate();
+    expect(s.candidates?.phase).toBe("error");
+    expect(JSON.stringify(s.annotation)).toBe(original);
+    expect(s.history).toHaveLength(0);
+  });
+});

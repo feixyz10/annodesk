@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from annodesk.candidates import CandidateApply, CandidateRequest, apply_candidate
 from annodesk.classes import compatible
 from annodesk.detector import inspect_classes
 from annodesk.domain import Annotation
@@ -316,6 +317,16 @@ def project_routes(
     def restore(operation: str):
         restore_trash(project(), operation)
         return {"restored": True}
+
+    @router.post("/images/{image_id}/mask-candidates")
+    def mask_candidates(image_id: str, body: CandidateRequest):
+        item = service()
+        return item.executor.submit(item.candidates, image_id, body).result()
+
+    @router.post("/images/{image_id}/mask-candidates/apply")
+    def save_candidate(image_id: str, body: CandidateApply):
+        registry.entry(body.model, "segmentation")
+        return apply_candidate(project(), image_id, body)
 
     @router.post("/images/{image_id}/segment")
     def segment(image_id: str, body: SegmentRequest):

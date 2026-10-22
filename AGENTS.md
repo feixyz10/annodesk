@@ -61,3 +61,9 @@ Use `frontend/src/i18n.ts` and the locale catalog for UI text, tooltips and acce
 Translate at render time so language switching stays reactive; preserve stored enums, project
 class/tag names, model IDs, paths and raw diagnostics. Use whole interpolated messages for counts.
 Keep bilingual wrapping and numeric alignment intact; verify both languages after UI edits.
+
+Interactive multimask proposals follow `docs/specs/mask-candidates.md`. Keep previews transient
+and bounded; applying a candidate preserves instance identity/class/box and validates revision,
+image stamp and external label fingerprints. Batch/auto/single-mask inference explicitly passes
+`multimask_output=False`; semantic text results are not alternative candidates. Keep at most one
+in-flight candidate request per client and discard stale results after edits or navigation.

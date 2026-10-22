@@ -32,6 +32,7 @@ import { useProject } from "./stores/project";
 import AnnotationCanvas from "./components/AnnotationCanvas.vue";
 import ImageList from "./components/ImageList.vue";
 import ClassPalette from "./components/ClassPalette.vue";
+import CandidateBar from "./components/CandidateBar.vue";
 import FilmStrip from "./components/FilmStrip.vue";
 import Icon from "./components/Icon.vue";
 import FastTooltip from "./components/FastTooltip.vue";
@@ -65,6 +66,8 @@ const shortcuts = [
   ["Positive / negative point", "Q / E"],
   ["Box / text prompt", "B / T"],
   ["Accept segmentation", "Enter"],
+  ["Apply / cancel mask candidate", "Enter / Esc"],
+  ["Switch candidates (candidate bar focused)", "← / →"],
   ["Fit image", "F"],
   ["Pan", "Hold Space"],
   ["Zoom in / out", "+ / -"],
@@ -180,7 +183,7 @@ function key(e: KeyboardEvent) {
     classesOpen.value ||
     tagsOpen.value ||
     help.value ||
-    (e.target as HTMLElement).closest(".task-window") ||
+    (e.target as HTMLElement).closest(".task-window, .mask-candidates") ||
     logsOpen.value ||
     batchSettings.value ||
     modelSettings.value ||
@@ -200,10 +203,20 @@ function key(e: KeyboardEvent) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (
     (e.target as HTMLElement).closest("button") &&
+    !(
+      store.candidates &&
+      (e.target as HTMLElement).closest("[data-candidate-trigger]")
+    ) &&
     ["Enter", " "].includes(e.key)
   )
     return;
   const k = e.key.toLowerCase();
+  if (store.candidates && ["enter", "escape"].includes(k)) {
+    e.preventDefault();
+    if (k === "enter") void store.applyCandidate();
+    else if (store.candidates.phase !== "applying") store.cancelCandidates();
+    return;
+  }
   if (k === "a" || k === "arrowleft") {
     e.preventDefault();
     store.move(-1);
@@ -690,6 +703,7 @@ onBeforeUnmount(() => {
               {{ store.annotation?.height }}</span
             >
           </div>
+          <CandidateBar />
           <FilmStrip />
         </section>
         <div
@@ -851,6 +865,24 @@ onBeforeUnmount(() => {
                     {{ t("Delete object") }}</button
                   ><button @click="store.segment()">
                     {{ t("Refine mask") }}
+                  </button>
+                  <button
+                    :disabled="
+                      !store.canGenerateCandidates || !!store.candidates
+                    "
+                    :title="
+                      store.canGenerateCandidates
+                        ? t(
+                            'Preview alternative masks for the selected instance; batch processing always uses one mask',
+                          )
+                        : t(
+                            'Choose a supported SAM model and a visible, unlocked object with points or a box',
+                          )
+                    "
+                    data-candidate-trigger
+                    @click="store.generateCandidates()"
+                  >
+                    {{ t("Generate candidates") }}
                   </button>
                   <button
                     v-if="store.object.mask || store.object.polygons.length"
