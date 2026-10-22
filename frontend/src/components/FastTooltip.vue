@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { locale } from "../i18n";
+import { watch, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 
 // Delegate to document so controls inside drawers and dynamically rendered lists
 // share one delay. Keep title declarations as the source of tooltip copy.
@@ -80,6 +81,7 @@ function leave(event: Event) {
 function dismiss(event: KeyboardEvent) {
   if (event.key === "Escape") hide();
 }
+watch(locale, hide);
 onMounted(() => {
   document.addEventListener("pointerover", enter, true);
   document.addEventListener("pointerout", leave, true);

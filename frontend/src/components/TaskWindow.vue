@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, statusLabel, taskLabel, formatDate } from "../i18n";
 import { computed, ref, watch, nextTick } from "vue";
 import { type Job, elapsed } from "../tasks";
 import TaskProgress from "./TaskProgress.vue";
@@ -73,22 +74,29 @@ function toggle(event: Event, id: string) {
       @keydown.esc.stop="emit('update:show', false)"
     >
       <div class="task-window-heading">
-        <h2 id="tasks-title">Tasks</h2>
+        <h2 id="tasks-title">{{ t("Tasks") }}</h2>
         <button
-          aria-label="Close tasks"
-          title="Close task window; processing continues"
+          :aria-label="t('Close tasks')"
+          :title="t('Close task window; processing continues')"
           @click="emit('update:show', false)"
         >
-          Close
+          {{ t("Close") }}
         </button>
       </div>
       <div class="task-window-body">
         <p class="muted">
-          Closing this window keeps tasks running. Reopen Tasks in the toolbar
-          to check progress.
+          {{
+            t(
+              "Closing this window keeps tasks running. Reopen Tasks in the toolbar to check progress.",
+            )
+          }}
         </p>
         <p v-if="!jobs.length">
-          No tasks yet. Start Batch processing or Export from the toolbar.
+          {{
+            t(
+              "No tasks yet. Start Batch processing or Export from the toolbar.",
+            )
+          }}
         </p>
         <details
           v-for="job in sorted"
@@ -98,25 +106,30 @@ function toggle(event: Event, id: string) {
           class="task-card"
         >
           <summary>
-            <strong>{{ title(job) }}</strong
+            <strong>{{ t(title(job)) }}</strong
             ><span class="task-status" :class="job.status">{{
-              job.status
+              statusLabel(job.status)
             }}</span
-            ><span>{{ job.completed }}/{{ job.total }} finished</span>
+            ><span>{{
+              t("{completed}/{total} finished", {
+                completed: job.completed,
+                total: job.total,
+              })
+            }}</span>
           </summary>
           <div class="task-body">
             <dl class="task-meta">
-              <dt>Started</dt>
+              <dt>{{ t("Started") }}</dt>
               <dd>
                 {{
                   job.started_at
-                    ? new Date(job.started_at * 1000).toLocaleString()
-                    : "Earlier session"
+                    ? formatDate(job.started_at)
+                    : t("Earlier session")
                 }}
               </dd>
-              <dt>Elapsed</dt>
+              <dt>{{ t("Elapsed") }}</dt>
               <dd>{{ elapsed(job) }}</dd>
-              <dt>Task ID</dt>
+              <dt>{{ t("Task ID") }}</dt>
               <dd>{{ job.id }}</dd>
             </dl>
             <TaskProgress
@@ -128,124 +141,142 @@ function toggle(event: Event, id: string) {
             <div v-if="job.kind !== 'export'" class="task-counts">
               <span
                 ><b>{{ job.processed || 0 }}</b
-                >Succeeded</span
+                >{{ t("Succeeded") }}</span
               ><span
                 ><b>{{ job.failed.length }}</b
-                >Failed</span
+                >{{ t("Failed") }}</span
               ><span
                 ><b>{{ job.skipped }}</b
-                >Skipped</span
+                >{{ t("Skipped") }}</span
               ><span
                 ><b>{{ job.remaining?.length || 0 }}</b
-                >Remaining</span
+                >{{ t("Remaining") }}</span
               >
             </div>
             <p
               v-if="job.kind === 'detection' || job.kind === 'boxes_from_masks'"
               class="muted"
             >
-              {{ job.boxes_added || 0 }} boxes added ·
-              {{ job.boxes_updated || 0 }} boxes updated ·
-              {{ job.detections_discarded || 0 }} detections discarded ·
-              {{ job.classes_added || 0 }} classes added
+              {{
+                t(
+                  "{added} boxes added · {updated} boxes updated · {discarded} detections discarded · {classes} classes added",
+                  {
+                    added: job.boxes_added || 0,
+                    updated: job.boxes_updated || 0,
+                    discarded: job.detections_discarded || 0,
+                    classes: job.classes_added || 0,
+                  },
+                )
+              }}
             </p>
             <p v-if="job.kind === 'export'">
-              {{ job.completed }}/{{ job.total }} images inspected. Exported and
-              skipped totals appear in the final report.
+              {{ job.completed }}/{{ job.total }}
+              {{
+                t(
+                  "images inspected. Exported and skipped totals appear in the final report.",
+                )
+              }}
             </p>
             <p v-if="!job.total && job.status === 'complete'">
               {{
                 job.kind === "export"
-                  ? "No images to export"
-                  : "No images require processing"
+                  ? t("No images to export")
+                  : t("No images require processing")
               }}
             </p>
             <section v-if="job.model || job.request" class="task-section">
-              <h3>Execution settings</h3>
+              <h3>{{ t("Execution settings") }}</h3>
               <dl class="task-meta">
                 <template v-if="job.kind !== 'export'"
-                  ><dt>Model</dt>
+                  ><dt>{{ t("Model") }}</dt>
                   <dd>
                     {{
                       job.kind === "boxes_from_masks"
-                        ? "None (CPU geometry)"
-                        : job.model || job.request?.model || "Default"
+                        ? t("None (CPU geometry)")
+                        : job.model || job.request?.model || t("Default")
                     }}
                   </dd>
-                  <dt v-if="job.plan">Devices</dt>
+                  <dt v-if="job.plan">{{ t("Devices") }}</dt>
                   <dd v-if="job.plan">
                     {{ job.plan.devices.join(", ") }}
                   </dd></template
                 ><template v-else
-                  ><dt>Task / format</dt>
+                  ><dt>{{ t("Task / format") }}</dt>
                   <dd>
-                    {{ job.request?.task }} / {{ job.request?.format }}
+                    {{ taskLabel(job.request?.task || "") }} /
+                    {{ job.request?.format }}
                   </dd></template
                 >
                 <template v-if="job.request?.review_states"
-                  ><dt>Review states</dt>
-                  <dd>{{ job.request.review_states.join(", ") }}</dd></template
+                  ><dt>{{ t("Review states") }}</dt>
+                  <dd>
+                    {{ job.request.review_states.map(statusLabel).join(" · ") }}
+                  </dd></template
                 >
                 <template v-if="job.kind === 'detection'">
-                  <dt>Thresholds</dt>
+                  <dt>{{ t("Thresholds") }}</dt>
                   <dd>
-                    Confidence {{ job.request?.confidence }} · NMS IoU
+                    {{ t("Confidence") }} {{ job.request?.confidence }}
+                    {{ t("· NMS IoU") }}
                     {{ job.request?.iou }}
                   </dd>
-                  <dt>Prediction</dt>
+                  <dt>{{ t("Prediction") }}</dt>
                   <dd>
-                    Image size {{ job.request?.imgsz }} · Max detections
+                    {{ t("Image size") }} {{ job.request?.imgsz }}
+                    {{ t("· Max detections") }}
                     {{ job.request?.max_det }}
                   </dd>
-                  <dt>Classes</dt>
+                  <dt>{{ t("Classes") }}</dt>
                   <dd>
                     {{
                       job.request?.model_classes?.join(", ") ||
-                      "All model classes"
+                      t("All model classes")
                     }}
                   </dd>
-                  <dt>Write policy</dt>
-                  <dd>{{ job.request?.write_policy }}</dd>
-                  <dt>New classes</dt>
+                  <dt>{{ t("Write policy") }}</dt>
+                  <dd>{{ statusLabel(job.request?.write_policy || "") }}</dd>
+                  <dt>{{ t("New classes") }}</dt>
                   <dd>
                     {{
                       job.request?.allow_new_classes
-                        ? "Add when detected"
-                        : "Discard outside project"
+                        ? t("Add when detected")
+                        : t("Discard outside project")
                     }}
                   </dd>
                 </template>
                 <template v-if="job.kind === 'boxes_from_masks'"
-                  ><dt>Existing boxes</dt>
+                  ><dt>{{ t("Existing boxes") }}</dt>
                   <dd>
                     {{
                       job.request?.recalculate_boxes
-                        ? "Recalculate unlocked"
-                        : "Preserve"
+                        ? t("Recalculate unlocked")
+                        : t("Preserve")
                     }}
                   </dd></template
                 >
                 <template v-if="job.request?.operation"
-                  ><dt>Image range</dt>
+                  ><dt>{{ t("Image range") }}</dt>
                   <dd>
                     {{
                       job.request?.image_ids
-                        ? job.request.image_ids.length + " selected images"
-                        : "All project images at task creation"
+                        ? t("{count} selected images", {
+                            count: job.request.image_ids.length,
+                          })
+                        : t("All project images at task creation")
                     }}
                   </dd></template
                 >
               </dl>
             </section>
             <section v-if="job.plan" class="task-section">
-              <h3>Workers · {{ job.plan.workers.length }}</h3>
+              <h3>{{ t("Workers ·") }} {{ job.plan.workers.length }}</h3>
               <div class="worker-table">
                 <div
                   v-for="(device, index) in job.plan.workers"
                   :key="index"
                   class="worker-row"
                 >
-                  <strong>Worker {{ index }}</strong
+                  <strong>{{ t("Worker") }} {{ index }}</strong
                   ><span>{{ device }}</span
                   ><template
                     v-if="
@@ -259,20 +290,20 @@ function toggle(event: Event, id: string) {
                       class="worker-image"
                     >
                       <span>{{ path(worker.image) }}</span
-                      ><span>{{ worker.elapsed_seconds }}s</span>
+                      ><span>{{ worker.elapsed_seconds }}{{ t("s") }}</span>
                     </div></template
                   ><span v-else class="muted">{{
                     job.status !== "running"
-                      ? "Stopped"
+                      ? t("Stopped")
                       : job.phase === "loading"
-                        ? "Loading model…"
-                        : "Idle"
+                        ? t("Loading model…")
+                        : t("Idle")
                   }}</span>
                 </div>
               </div>
             </section>
             <section v-if="job.error || job.failed.length" class="task-section">
-              <h3>Errors · {{ job.failed.length }}</h3>
+              <h3>{{ t("Errors ·") }} {{ job.failed.length }}</h3>
               <p v-if="job.error" class="task-error">{{ job.error }}</p>
               <div class="task-failures">
                 <div v-for="(failure, index) in job.failed" :key="index">
@@ -282,7 +313,7 @@ function toggle(event: Event, id: string) {
               </div>
             </section>
             <section v-if="job.output" class="task-section">
-              <h3>Saved on the backend</h3>
+              <h3>{{ t("Saved on the backend") }}</h3>
               <p class="task-output">{{ job.output }}</p>
             </section>
             <div class="task-actions">
@@ -290,17 +321,20 @@ function toggle(event: Event, id: string) {
                 v-if="job.status === 'running'"
                 @click="emit('cancel', job.id)"
               >
-                Cancel after active images</button
+                {{ t("Cancel after active images") }}</button
               ><button
                 v-else-if="job.kind !== 'export' && job.remaining?.length"
                 @click="emit('resume', job.id)"
               >
-                Resume pending images</button
-              ><button @click="emit('logs')">View logs</button>
+                {{ t("Resume pending images") }}</button
+              ><button @click="emit('logs')">{{ t("View logs") }}</button>
             </div>
             <p v-if="job.kind !== 'export'" class="muted">
-              Finished = succeeded + failed. Success is counted after saving.
-              Generated annotations still require human review.
+              {{
+                t(
+                  "Finished = succeeded + failed. Success is counted after saving. Generated annotations still require human review.",
+                )
+              }}
             </p>
           </div>
         </details>

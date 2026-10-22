@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, ref, watch, nextTick } from "vue";
 import { useProject } from "../stores/project";
 import ThumbImage from "./ThumbImage.vue";
@@ -29,7 +30,7 @@ watch(
 <template>
   <div class="film-wrap">
     <button
-      title="Scroll previews left"
+      :title="t('Scroll previews left')"
       @click="el?.scrollBy({ left: -360, behavior: 'smooth' })"
     >
       ‹
@@ -62,7 +63,7 @@ watch(
       ></span>
     </div>
     <button
-      title="Scroll previews right"
+      :title="t('Scroll previews right')"
       @click="el?.scrollBy({ left: 360, behavior: 'smooth' })"
     >
       ›

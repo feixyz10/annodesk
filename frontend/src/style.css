@@ -752,3 +752,113 @@ kbd {
   align-items: center;
   gap: 4px;
 }
+
+/* Bilingual typography uses the same grid and control rhythm in both languages. */
+:root {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+}
+:lang(zh-CN) {
+  line-break: strict;
+}
+header {
+  height: auto;
+  min-height: 58px;
+  flex-wrap: wrap;
+}
+.language-select {
+  width: auto;
+  min-width: 94px;
+  flex: 0 0 auto;
+}
+.row {
+  flex-wrap: wrap;
+}
+button,
+label,
+.shortcut > span,
+.task-meta dd {
+  overflow-wrap: anywhere;
+}
+button {
+  line-height: 1.5;
+}
+.model-summary {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.model-summary small {
+  flex: none;
+}
+.canvasbar > button,
+.canvasbar > label,
+.view-tools {
+  flex-shrink: 0;
+}
+.canvasbar > .model-summary {
+  flex-shrink: 1;
+}
+.review {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.review button {
+  min-height: 30px;
+  padding: 5px 7px;
+}
+.statistics-bar > span {
+  white-space: nowrap;
+}
+.statistics-bar b,
+.zoom,
+.task-counts b,
+.coords input {
+  font-variant-numeric: tabular-nums;
+}
+.class-item span,
+.object-row span,
+.category-editor > input,
+.model-fields > label,
+.batch-fields > label {
+  min-width: 0;
+}
+.class-item small,
+.object-row small {
+  flex: none;
+  white-space: nowrap;
+}
+.shortcut {
+  align-items: center;
+}
+.shortcut kbd {
+  flex: none;
+  white-space: nowrap;
+}
+.task-notice {
+  max-width: calc(100vw - 32px);
+  white-space: normal;
+}
+.n-card,
+.n-drawer {
+  overflow-wrap: anywhere;
+}
+.n-card-header__main,
+.n-drawer-header__main {
+  line-height: 1.5;
+}
+.task-switch > button {
+  flex: 1 1 0;
+}
+.model-summary-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-controls > .row:last-child {
+  display: grid;
+  grid-template-columns: auto repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  align-items: stretch;
+}

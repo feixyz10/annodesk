@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, uiError, statusLabel, taskLabel } from "../i18n";
 import { computed, ref, watch } from "vue";
 import { NModal } from "naive-ui";
 import { request, type ModelCheck, type ModelParameters } from "../api";
@@ -109,10 +110,10 @@ async function apply() {
     :show="show"
     @update:show="emit('update:show', $event)"
     preset="card"
-    title="Model settings"
+    :title="t('Model settings')"
     style="width: 900px; max-width: 90vw; max-height: 80vh; overflow: auto"
   >
-    <div class="model-tabs" role="tablist" aria-label="Model task">
+    <div class="model-tabs" role="tablist" :aria-label="t('Model task')">
       <button
         v-for="task in ['detection', 'segmentation'] as const"
         :key="task"
@@ -125,50 +126,61 @@ async function apply() {
           changeMode();
         "
       >
-        {{ task === "detection" ? "Detection" : "Segmentation" }}
+        {{ task === "detection" ? t("Detection") : t("Segmentation") }}
       </button>
     </div>
     <p class="muted">
-      Settings apply to this project. Model weights stay on the backend; no
-      automatic downloads.
+      {{
+        t(
+          "Settings apply to this project. Model weights stay on the backend; no automatic downloads.",
+        )
+      }}
     </p>
     <div class="model-form">
       <label
-        >Model<select
+        >{{ t("Model")
+        }}<select
           v-model="draft.model"
           :disabled="!!busy"
           @change="selectModel"
         >
           <option v-for="model in options" :key="model.id" :value="model.id">
-            {{ model.name }}{{ model.available ? "" : " (unavailable)" }}
+            {{ model.name }}{{ model.available ? "" : t(" (unavailable)") }}
           </option>
         </select></label
       >
       <div class="model-state">
-        <strong>{{ state }}</strong
+        <strong>{{ t(state) }}</strong
         ><span v-if="store.models?.loaded_model === draft.model">{{
           store.models?.loaded_device
         }}</span>
       </div>
     </div>
     <p v-if="!options.length">
-      No {{ mode }} models configured. Add a compatible local model to
-      models.json, then Reload.
+      {{
+        t(
+          "No {task} models configured. Add a compatible local model to models.json, then Reload.",
+          { task: taskLabel(mode) },
+        )
+      }}
     </p>
     <div class="model-actions">
       <button :disabled="!!busy" @click="store.refreshModels()">
-        Reload configuration</button
+        {{ t("Reload configuration") }}</button
       ><button :disabled="!!busy || !chosen?.available" @click="inspect(false)">
-        Check {{ mode === "detection" ? "classes" : "availability" }}</button
+        {{
+          mode === "detection" ? t("Check classes") : t("Check availability")
+        }}</button
       ><button :disabled="!!busy || !chosen?.available" @click="inspect(true)">
-        Load model
+        {{ t("Load model") }}
       </button>
     </div>
     <section class="model-section">
-      <h3>Execution device</h3>
+      <h3>{{ t("Execution device") }}</h3>
       <div class="model-fields">
         <label
-          >Device type<select v-model="draft.device_type" :disabled="!!busy">
+          >{{ t("Device type")
+          }}<select v-model="draft.device_type" :disabled="!!busy">
             <option
               v-for="device in ['auto', 'cuda', 'cpu', 'mps']"
               :key="device"
@@ -177,23 +189,28 @@ async function apply() {
             </option>
           </select></label
         ><label
-          >Logical CUDA devices<input
+          >{{ t("Logical CUDA devices")
+          }}<input
             v-model="draft.devices"
             :disabled="!!busy"
-            placeholder="auto or 0,1"
+            :placeholder="t('auto or 0,1')"
         /></label>
       </div>
       <p class="muted">
-        Load uses one device. Batch jobs configure their own device and worker
-        plan.
+        {{
+          t(
+            "Load uses one device. Batch jobs configure their own device and worker plan.",
+          )
+        }}
       </p>
     </section>
     <template v-if="mode === 'detection'">
       <section class="model-section">
-        <h3>Detection parameters</h3>
+        <h3>{{ t("Detection parameters") }}</h3>
         <div class="model-fields">
           <label
-            >Confidence threshold<input
+            >{{ t("Confidence threshold")
+            }}<input
               v-model.number="draft.confidence"
               type="number"
               min="0"
@@ -201,7 +218,8 @@ async function apply() {
               step="0.05"
               :disabled="!!busy" /></label
           ><label
-            >NMS IoU<input
+            >{{ t("NMS IoU")
+            }}<input
               v-model.number="draft.iou"
               type="number"
               min="0"
@@ -209,7 +227,8 @@ async function apply() {
               step="0.05"
               :disabled="!!busy" /></label
           ><label
-            >Input size<input
+            >{{ t("Input size")
+            }}<input
               v-model.number="draft.imgsz"
               type="number"
               min="32"
@@ -217,35 +236,38 @@ async function apply() {
               step="32"
               :disabled="!!busy" /></label
           ><label
-            >Maximum detections<input
+            >{{ t("Maximum detections")
+            }}<input
               v-model.number="draft.max_det"
               type="number"
               min="1"
               max="10000"
               :disabled="!!busy" /></label
           ><label
-            >Model class filter<input
+            >{{ t("Model class filter")
+            }}<input
               v-model="selectedClasses"
-              placeholder="All classes, or 0,2,5"
+              :placeholder="t('All classes, or 0,2,5')"
               :disabled="!!busy" /></label
           ><label
-            >Write policy<select
-              v-model="draft.write_policy"
-              :disabled="!!busy"
-            >
-              <option value="fill_empty">Empty images only</option>
+            >{{ t("Write policy")
+            }}<select v-model="draft.write_policy" :disabled="!!busy">
+              <option value="fill_empty">{{ t("Empty images only") }}</option>
               <option value="append">
-                Append; preserve existing annotations
+                {{ t("Append; preserve existing annotations") }}
               </option>
             </select></label
           >
         </div>
       </section>
       <section class="model-section">
-        <h3>Project class compatibility</h3>
+        <h3>{{ t("Project class compatibility") }}</h3>
         <p>
-          IDs and names must match exactly, or one complete class table must be
-          a subset of the other.
+          {{
+            t(
+              "IDs and names must match exactly, or one complete class table must be a subset of the other.",
+            )
+          }}
         </p>
         <label class="new-class-toggle"
           ><input
@@ -253,17 +275,21 @@ async function apply() {
             type="checkbox"
             :disabled="!!busy"
           />
-          Allow new classes from this model</label
+          {{ t("Allow new classes from this model") }}</label
         >
         <p class="muted">
-          When enabled, extra classes are added only when a retained detection
-          is saved. Original IDs are preserved.
+          {{
+            t(
+              "When enabled, extra classes are added only when a retained detection is saved. Original IDs are preserved.",
+            )
+          }}
         </p>
         <template v-if="check?.compatibility"
           ><p class="compatible">
-            Compatible ·
-            {{ check.compatibility.relation.replaceAll("_", " ") }} ·
-            {{ check.compatibility.accepted_classes }} existing classes
+            {{ t("Compatible ·") }}
+            {{ statusLabel(check.compatibility.relation) }} ·
+            {{ check.compatibility.accepted_classes }}
+            {{ t("existing classes") }}
           </p>
           <div class="model-class-table">
             <div v-for="(name, id) in check.class_names" :key="id">
@@ -271,33 +297,39 @@ async function apply() {
               ><strong>{{ name }}</strong
               ><span>{{
                 store.meta?.classes.some((c) => c.index === Number(id))
-                  ? "Existing"
+                  ? t("Existing")
                   : draft.allow_new_classes
-                    ? "Add when detected"
-                    : "Discard results"
+                    ? t("Add when detected")
+                    : t("Discard results")
               }}</span>
             </div>
           </div></template
         >
       </section>
     </template>
-    <p v-if="busy" role="status">{{ busy }}</p>
+    <p v-if="busy" role="status">{{ t(busy) }}</p>
     <div v-if="error" role="alert" class="model-error">
       <p>
-        Settings could not be checked or applied. Review the diagnostics below.
+        {{
+          t(
+            "Settings could not be checked or applied. Review the diagnostics below.",
+          )
+        }}
       </p>
       <details open>
-        <summary>Diagnostics</summary>
-        <pre>{{ error }}</pre>
+        <summary>{{ t("Diagnostics") }}</summary>
+        <pre>{{ uiError(error) }}</pre>
       </details>
     </div>
     <div class="model-footer">
-      <span class="muted"
-        >Load is a runtime action. Apply saves settings; Cancel discards
-        unapplied changes.</span
-      ><button @click="emit('update:show', false)">Cancel</button
+      <span class="muted">{{
+        t(
+          "Load is a runtime action. Apply saves settings; Cancel discards unapplied changes.",
+        )
+      }}</span
+      ><button @click="emit('update:show', false)">{{ t("Cancel") }}</button
       ><button class="primary" :disabled="!!busy || !chosen" @click="apply">
-        Apply
+        {{ t("Apply") }}
       </button>
     </div>
   </NModal>

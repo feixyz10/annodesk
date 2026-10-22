@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, nextTick, ref, watch } from "vue";
 import { NModal } from "naive-ui";
 import { useProject } from "../stores/project";
@@ -65,18 +66,18 @@ function key(event: KeyboardEvent) {
   <NModal
     v-model:show="store.classPickerOpen"
     preset="card"
-    title="Change class"
+    :title="t('Change class')"
     class="class-picker"
     :style="{ width: '380px', maxWidth: 'calc(100vw - 32px)' }"
     @after-enter="search?.focus()"
   >
     <div @keydown="key">
-      <p class="muted">Assign a class to the selected annotation.</p>
+      <p class="muted">{{ t("Assign a class to the selected annotation.") }}</p>
       <input
         ref="search"
         v-model="query"
-        aria-label="Search classes by name or ID"
-        placeholder="Search by class name or ID…"
+        :aria-label="t('Search classes by name or ID')"
+        :placeholder="t('Search by class name or ID…')"
         role="combobox"
         aria-controls="class-picker-options"
         :aria-expanded="true"
@@ -90,7 +91,7 @@ function key(event: KeyboardEvent) {
         ref="list"
         class="class-picker-list"
         role="listbox"
-        aria-label="Matching classes"
+        :aria-label="t('Matching classes')"
       >
         <button
           v-for="(c, i) in matches"
@@ -104,13 +105,17 @@ function key(event: KeyboardEvent) {
         >
           <i :style="{ background: c.color }"></i><span>{{ c.name }}</span
           ><small>ID {{ c.index }}</small>
-          <span v-if="store.object?.class_id === c.id" class="muted"
-            >Current</span
-          >
+          <span v-if="store.object?.class_id === c.id" class="muted">{{
+            t("Current")
+          }}</span>
         </button>
-        <p v-if="!matches.length" class="muted">No matching classes.</p>
+        <p v-if="!matches.length" class="muted">
+          {{ t("No matching classes.") }}
+        </p>
       </div>
-      <p class="muted picker-help">↑ ↓ navigate · Enter assign · Esc cancel</p>
+      <p class="muted picker-help">
+        {{ t("↑ ↓ navigate · Enter assign · Esc cancel") }}
+      </p>
     </div>
   </NModal>
 </template>

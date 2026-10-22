@@ -1,5 +1,14 @@
 <script setup lang="ts">
 import {
+  t,
+  locale,
+  setLocale,
+  taskLabel,
+  statusLabel,
+  toolLabel,
+  uiError,
+} from "./i18n";
+import {
   onMounted,
   onBeforeUnmount,
   ref,
@@ -13,6 +22,10 @@ import {
   NDrawerContent,
   NModal,
   NButton,
+  enUS,
+  zhCN,
+  dateEnUS,
+  dateZhCN,
 } from "naive-ui";
 import { configureApi, request, type ProjectMeta, type Category } from "./api";
 import { useProject } from "./stores/project";
@@ -270,6 +283,9 @@ const currentModelState = computed(() =>
       : "Available",
 );
 const taskNotice = ref("");
+watch(locale, () => {
+  taskNotice.value = "";
+});
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 const lastJob = computed(() => jobs.value.at(-1));
 const activeJob = computed(() =>
@@ -313,7 +329,11 @@ async function refreshJobs() {
       if (finished) {
         void store.refreshMeta().catch((e) => (store.error = String(e)));
         void store.refreshCurrent().catch((e) => (store.error = String(e)));
-        taskNotice.value = `${finished.kind === "export" ? "Export" : "Batch"} ${finished.status} · ${finished.failed.length} failed`;
+        taskNotice.value = t("{kind} {status} · {count} failed", {
+          kind: t(finished.kind === "export" ? "Export" : "Batch"),
+          status: statusLabel(finished.status),
+          count: finished.failed.length,
+        });
         if (noticeTimer) clearTimeout(noticeTimer);
         noticeTimer = setTimeout(() => (taskNotice.value = ""), 6000);
       }
@@ -338,7 +358,7 @@ async function jobAction(id: string, resume = false) {
   }
 }
 function createClass() {
-  const name = window.prompt("New class name");
+  const name = window.prompt(t("New class name"));
   if (name) void store.addClass(name);
 }
 function unload(e: BeforeUnloadEvent) {
@@ -369,11 +389,13 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <NConfigProvider
+    :locale="locale === 'zh-CN' ? zhCN : enUS"
+    :date-locale="locale === 'zh-CN' ? dateZhCN : dateEnUS"
     ><div class="app" :inert="store.navigating">
       <header>
         <div
           class="header-cluster project-cluster"
-          aria-label="Project management"
+          :aria-label="t('Project management')"
         >
           <strong class="brand"
             ><img
@@ -388,57 +410,72 @@ onBeforeUnmount(() => {
               path = store.meta?.root ?? '';
               openDialog = true;
             "
-            title="Open a dataset or image folder on the backend"
+            :title="t('Open a dataset or image folder on the backend')"
           >
             {{
-              store.meta ? store.meta.root.split("/").at(-1) : "Open project…"
+              store.meta
+                ? store.meta.root.split("/").at(-1)
+                : t("Open project…")
             }}
           </button>
           <button
-            title="Manage project class names, colors and IDs. Use the palette to assign annotations."
+            :title="
+              t(
+                'Manage project class names, colors and IDs. Use the palette to assign annotations.',
+              )
+            "
             @click="classesOpen = true"
           >
-            Classes
+            {{ t("Classes") }}
           </button>
           <button
-            title="Manage project tag names and colors"
+            :title="t('Manage project tag names and colors')"
             @click="tagsOpen = true"
           >
-            Tags
+            {{ t("Tags") }}
           </button>
         </div>
         <div
           class="header-cluster processing-cluster"
-          aria-label="Dataset operations"
+          :aria-label="t('Dataset operations')"
         >
           <button
-            title="Detect boxes, segment existing boxes, or create boxes from masks"
+            :title="
+              t(
+                'Detect boxes, segment existing boxes, or create boxes from masks',
+              )
+            "
             :disabled="!store.meta"
             @click="batchSettings = true"
           >
-            Batch…
+            {{ t("Batch…") }}
           </button>
           <button
-            title="Export reviewed annotations for the current task"
+            :title="t('Export reviewed annotations for the current task')"
             :disabled="!store.meta"
             @click="exportCurrent"
           >
-            Export
+            {{ t("Export") }}
           </button>
         </div>
         <span class="grow" />
         <div
           class="header-cluster diagnostics-cluster"
-          aria-label="Tasks and diagnostics"
+          :aria-label="t('Tasks and diagnostics')"
         >
           <button
             class="task-button"
             @click="jobsOpen = true"
             :disabled="!store.meta"
-            title="Batch processing and export progress; closing the window keeps tasks running"
+            :title="
+              t(
+                'Batch processing and export progress; closing the window keeps tasks running',
+              )
+            "
           >
             <span v-if="activeJob" class="task-spinner" aria-hidden="true" />
-            Tasks<span v-if="activeJob">
+            {{ t("Tasks")
+            }}<span v-if="activeJob">
               · {{ activeJob.completed }}/{{ activeJob.total }}</span
             >
             <span
@@ -451,24 +488,38 @@ onBeforeUnmount(() => {
               class="task-button-progress"
               :value="isPreparing(activeJob) ? undefined : activeJob.completed"
               :max="Math.max(1, activeJob.total)"
-              :aria-label="activeJob.phase || 'Task progress'"
+              :aria-label="
+                activeJob.phase
+                  ? statusLabel(activeJob.phase)
+                  : t('Task progress')
+              "
             />
           </button>
           <button
             @click="logsOpen = true"
-            title="Important model, device, worker and error events"
+            :title="t('Important model, device, worker and error events')"
           >
-            Logs
+            {{ t("Logs") }}
           </button>
         </div>
         <button
           class="help-button"
-          title="Keyboard shortcuts · ?"
-          aria-label="Shortcuts"
+          :title="t('Keyboard shortcuts · ?')"
+          :aria-label="t('Shortcuts')"
           @click="help = true"
         >
           <Icon name="help" />
         </button>
+        <select
+          class="language-select"
+          :aria-label="t('Language')"
+          :title="t('Interface language')"
+          :value="locale"
+          @change="setLocale(($event.target as HTMLSelectElement).value)"
+        >
+          <option value="en">English</option>
+          <option value="zh-CN">简体中文</option>
+        </select>
       </header>
       <StatisticsBar :active="!!activeJob" />
       <div v-if="taskNotice" class="task-notice" role="status">
@@ -479,14 +530,15 @@ onBeforeUnmount(() => {
             taskNotice = '';
           "
         >
-          Details
+          {{ t("Details") }}
         </button>
       </div>
       <LogDrawer v-model:show="logsOpen" />
       <div v-if="store.error" class="alert" role="alert">
-        {{ store.error }}<button @click="store.error = ''">Dismiss</button
+        {{ uiError(store.error)
+        }}<button @click="store.error = ''">{{ t("Dismiss") }}</button
         ><button v-if="store.dirty" @click="store.save().catch(() => {})">
-          Retry save
+          {{ t("Retry save") }}
         </button>
       </div>
       <main
@@ -500,7 +552,7 @@ onBeforeUnmount(() => {
           <div
             class="horizontal split"
             role="separator"
-            aria-label="Resize images and classes"
+            :aria-label="t('Resize images and classes')"
             aria-orientation="horizontal"
             @pointerdown="resize($event, 'top')"
             @dblclick="top = 53"
@@ -510,7 +562,7 @@ onBeforeUnmount(() => {
         <div
           class="split"
           role="separator"
-          aria-label="Resize left panel"
+          :aria-label="t('Resize left panel')"
           aria-orientation="vertical"
           @pointerdown="resize($event, 'left')"
           @dblclick="left = 260"
@@ -519,25 +571,29 @@ onBeforeUnmount(() => {
           <button
             v-for="[id, title, key] in tools"
             :key="id"
-            :title="title + ' · ' + key"
-            :aria-label="title"
+            :title="t(title) + ' · ' + key"
+            :aria-label="t(title)"
             :class="{ active: store.tool === id }"
             @click="store.tool = id"
           >
             <Icon :name="id" /></button
-          ><button title="Undo · Ctrl+Z or ⌘Z" @click="store.undo()">↶</button>
+          ><button :title="t('Undo · Ctrl+Z or ⌘Z')" @click="store.undo()">
+            ↶
+          </button>
         </nav>
         <section class="center">
           <div class="canvasbar">
             <button
               class="model-summary"
               :disabled="!store.meta"
-              title="Choose a model, load it, and configure inference"
+              :title="t('Choose a model, load it, and configure inference')"
               @click="modelSettings = true"
             >
-              {{ store.task === "detection" ? "Detector" : "SAM" }}:
-              {{ currentModel?.name || "Choose model" }}
-              <small>{{ currentModelState }}</small>
+              <span class="model-summary-name"
+                >{{ store.task === "detection" ? t("Detector") : t("SAM") }}:
+                {{ currentModel?.name || t("Choose model") }}</span
+              >
+              <small>{{ t(currentModelState) }}</small>
             </button>
             <button
               class="primary"
@@ -553,33 +609,35 @@ onBeforeUnmount(() => {
             >
               {{
                 store.task === "detection"
-                  ? "Detect current"
-                  : "Segment current"
+                  ? t("Detect current")
+                  : t("Segment current")
               }}
             </button>
             <label
               v-if="store.task === 'segmentation'"
-              title="Process missing masks when switching images"
+              :title="t('Process missing masks when switching images')"
               ><input v-model="store.autoSegment" type="checkbox" />
-              Auto-segment</label
+              {{ t("Auto-segment") }}</label
             >
-            <label v-else title="Detect empty, unreviewed images when switching"
+            <label
+              v-else
+              :title="t('Detect empty, unreviewed images when switching')"
               ><input
                 v-model="store.autoDetect"
                 type="checkbox"
                 :disabled="!store.detectionModel"
               />
-              Auto-detect</label
+              {{ t("Auto-detect") }}</label
             >
             <span class="grow" />
             <div
               class="view-tools"
               role="toolbar"
-              aria-label="Image view controls"
+              :aria-label="t('Image view controls')"
             >
               <button
-                aria-label="Pan"
-                title="Pan · hold Space for temporary pan"
+                :aria-label="t('Pan')"
+                :title="t('Pan · hold Space for temporary pan')"
                 :class="{ active: store.tool === 'pan' }"
                 :aria-pressed="store.tool === 'pan'"
                 @click="store.tool = store.tool === 'pan' ? 'select' : 'pan'"
@@ -587,22 +645,22 @@ onBeforeUnmount(() => {
                 <Icon name="pan" />
               </button>
               <button
-                aria-label="Zoom out"
-                title="Zoom out · -"
+                :aria-label="t('Zoom out')"
+                :title="t('Zoom out · -')"
                 @click="canvas?.zoom(0.8)"
               >
                 <Icon name="minus" /></button
               ><span class="zoom"
                 >{{ Math.round((canvas?.ratio ?? 1) * 100) }}%</span
               ><button
-                aria-label="Zoom in"
-                title="Zoom in · +"
+                :aria-label="t('Zoom in')"
+                :title="t('Zoom in · +')"
                 @click="canvas?.zoom(1.25)"
               >
                 <Icon name="plus" /></button
               ><button
-                aria-label="Fit image"
-                title="Fit image · F"
+                :aria-label="t('Fit image')"
+                :title="t('Fit image · F')"
                 @click="canvas?.fit()"
               >
                 <Icon name="fit" />
@@ -612,21 +670,21 @@ onBeforeUnmount(() => {
           <div v-if="store.tool === 'text'" class="textbar">
             <input
               v-model="promptText"
-              placeholder="English target description…"
+              :placeholder="t('English target description…')"
             /><button @click="store.segment(false, promptText)">
-              Preview text segmentation
+              {{ t("Preview text segmentation") }}
             </button>
           </div>
           <AnnotationCanvas ref="canvas" />
           <div v-if="!store.current" class="empty">
-            <h2>Open an image dataset</h2>
-            <p>Start with images or import existing YOLO boxes.</p>
-            <NButton type="primary" @click="openDialog = true"
-              >Open project</NButton
-            >
+            <h2>{{ t("Open an image dataset") }}</h2>
+            <p>{{ t("Start with images or import existing YOLO boxes.") }}</p>
+            <NButton type="primary" @click="openDialog = true">{{
+              t("Open project")
+            }}</NButton>
           </div>
           <div class="imagebar">
-            {{ store.current?.path ?? "No image selected"
+            {{ store.current?.path ?? t("No image selected")
             }}<span
               >{{ store.annotation?.width }} ×
               {{ store.annotation?.height }}</span
@@ -637,30 +695,30 @@ onBeforeUnmount(() => {
         <div
           class="split"
           role="separator"
-          aria-label="Resize right panel"
+          :aria-label="t('Resize right panel')"
           aria-orientation="vertical"
           @pointerdown="resize($event, 'right')"
           @dblclick="right = 290"
         ></div>
         <aside class="right-panel">
           <div class="section">
-            <strong>Current image</strong>
+            <strong>{{ t("Current image") }}</strong>
             <p class="muted ellipsis" :title="store.current?.path">
               {{ store.current?.path ?? "—" }}
             </p>
-            <div class="row">
+            <div class="row task-switch">
               <button
                 v-for="task in ['detection', 'segmentation'] as const"
                 :class="{ active: store.task === task }"
                 @click="store.task = task"
               >
-                {{ task }}
+                {{ taskLabel(task) }}
               </button>
             </div>
           </div>
           <template v-if="store.annotation"
             ><div class="section">
-              <h3>Image review</h3>
+              <h3>{{ t("Image review") }}</h3>
               <div class="review">
                 <button
                   v-for="{ value, label } in reviewStates"
@@ -676,7 +734,7 @@ onBeforeUnmount(() => {
                   }"
                   @click="review(value)"
                 >
-                  {{ label }}
+                  {{ t(label) }}
                 </button>
               </div>
               <div class="tag-chips">
@@ -691,11 +749,11 @@ onBeforeUnmount(() => {
               </div>
               <input
                 :value="store.annotation.tags.join(', ')"
-                placeholder="Image tags, comma separated"
+                :placeholder="t('Image tags, comma separated')"
                 @change="tags(($event.target as HTMLInputElement).value)"
               /><textarea
                 v-model="store.annotation.notes"
-                placeholder="Image notes…"
+                :placeholder="t('Image notes…')"
                 @change="store.changed()"
               ></textarea
               ><label
@@ -704,12 +762,12 @@ onBeforeUnmount(() => {
                   v-model="store.annotation.explicit_empty[store.task]"
                   @change="store.changed()"
                 />
-                Confirm no objects for this task</label
+                {{ t("Confirm no objects for this task") }}</label
               >
             </div>
             <div class="section">
               <div class="row">
-                <h3>Objects</h3>
+                <h3>{{ t("Objects") }}</h3>
                 <span class="muted">{{
                   store.annotation.instances.length
                 }}</span>
@@ -730,33 +788,33 @@ onBeforeUnmount(() => {
                 ></i
                 ><span>{{
                   store.meta?.classes.find((c) => c.id === object.class_id)
-                    ?.name ?? "Unassigned"
+                    ?.name ?? t("Unassigned")
                 }}</span
                 ><small
-                  >{{ object.box ? "Box" : "" }}
-                  {{ object.polygons.length ? "Mask" : "" }}</small
+                  >{{ object.box ? t("Box") : "" }}
+                  {{ object.polygons.length ? t("Mask") : "" }}</small
                 ></button
               ><template v-if="store.object"
                 ><button
-                  title="Search and assign a class · C"
+                  :title="t('Search and assign a class · C')"
                   :disabled="store.object.locked"
                   @click="store.openClassPicker()"
                 >
-                  Change class <kbd>C</kbd>
+                  {{ t("Change class") }} <kbd>{{ t("C") }}</kbd>
                 </button>
                 <select
                   :disabled="store.object.locked"
-                  title="Assign a class to the selected annotation"
+                  :title="t('Assign a class to the selected annotation')"
                   v-model="store.object.class_id"
                   @change="store.changed(true)"
                 >
-                  <option :value="null">Unassigned</option>
+                  <option :value="null">{{ t("Unassigned") }}</option>
                   <option v-for="c in store.meta?.classes" :value="c.id">
                     {{ c.name }}
                   </option>
                 </select>
                 <p v-if="store.object.confidence != null" class="muted">
-                  Original detection confidence:
+                  {{ t("Original detection confidence:") }}
                   {{ (store.object.confidence * 100).toFixed(1) }}%
                 </p>
                 <div v-if="store.object.box" class="coords">
@@ -775,23 +833,25 @@ onBeforeUnmount(() => {
                       v-model="store.object.locked"
                       @change="store.changed()"
                     />
-                    Locked</label
+                    {{ t("Locked") }}</label
                   ><label
                     ><input
                       type="checkbox"
                       v-model="store.object.hidden"
                       @change="store.changed()"
                     />
-                    Hidden</label
+                    {{ t("Hidden") }}</label
                   >
                 </div>
                 <div class="row">
                   <button
-                    title="Delete selected annotation · X or Delete"
+                    :title="t('Delete selected annotation · X or Delete')"
                     @click="store.remove()"
                   >
-                    Delete object</button
-                  ><button @click="store.segment()">Refine mask</button>
+                    {{ t("Delete object") }}</button
+                  ><button @click="store.segment()">
+                    {{ t("Refine mask") }}
+                  </button>
                   <button
                     v-if="store.object.mask || store.object.polygons.length"
                     :disabled="store.object.locked"
@@ -799,8 +859,8 @@ onBeforeUnmount(() => {
                   >
                     {{
                       store.object.box
-                        ? "Recalculate box from mask"
-                        : "Create box from mask"
+                        ? t("Recalculate box from mask")
+                        : t("Create box from mask")
                     }}
                   </button>
                 </div></template
@@ -811,42 +871,53 @@ onBeforeUnmount(() => {
                     (o) => o.mask || o.polygons.length,
                   )
                 "
-                title="Create only missing boxes; preserve masks, classes and locked instances"
+                :title="
+                  t(
+                    'Create only missing boxes; preserve masks, classes and locked instances',
+                  )
+                "
                 @click="store.boxesFromMasks()"
               >
-                Create missing boxes from masks
+                {{ t("Create missing boxes from masks") }}
               </button>
               <p v-if="!store.object" class="muted">
-                Select an object to inspect or edit it.
+                {{ t("Select an object to inspect or edit it.") }}
               </p>
             </div></template
           >
         </aside>
       </main>
       <footer>
-        <span>{{ store.tool }}</span
-        ><span>A / D or ← / →: previous / next image</span
+        <span>{{ toolLabel(store.tool) }}</span
+        ><span>{{ t("A / D or ← / →: previous / next image") }}</span
         ><span class="grow"></span
         ><span :class="{ warning: store.dirty }">{{
-          store.saving ? "Saving…" : store.dirty ? "Unsaved changes" : "Saved"
+          store.saving
+            ? t("Saving…")
+            : store.dirty
+              ? t("Unsaved changes")
+              : t("Saved")
         }}</span>
       </footer>
       <NModal
         v-model:show="openDialog"
         preset="card"
-        title="Open project"
+        :title="t('Open project')"
         style="width: 520px"
         ><p>
-          Enter a folder path on the backend machine. An images subfolder and
-          data.yaml are optional.
+          {{
+            t(
+              "Enter a folder path on the backend machine. An images subfolder and data.yaml are optional.",
+            )
+          }}
         </p>
         <input
           v-model="path"
-          placeholder="/path/to/dataset"
+          :placeholder="t('/path/to/dataset')"
           @keydown.enter="openProject"
         />
         <div class="row" style="margin-top: 16px">
-          <NButton type="primary" @click="openProject">Open</NButton>
+          <NButton type="primary" @click="openProject">{{ t("Open") }}</NButton>
         </div></NModal
       >
       <ModelSettings v-model:show="modelSettings" />
@@ -870,10 +941,13 @@ onBeforeUnmount(() => {
         "
       />
       <NDrawer v-model:show="classesOpen" :width="390"
-        ><NDrawerContent title="Project classes" closable
+        ><NDrawerContent :title="t('Project classes')" closable
           ><p>
-            Manage names and colors. Use the class palette to assign
-            annotations.
+            {{
+              t(
+                "Manage names and colors. Use the class palette to assign annotations.",
+              )
+            }}
           </p>
           <div v-for="c in store.meta?.classes" class="category-editor">
             <input type="color" v-model="c.color" @change="update(c)" /><input
@@ -881,34 +955,42 @@ onBeforeUnmount(() => {
               @change="update(c)"
             /><span>ID {{ c.index }}</span>
           </div>
-          <button @click="createClass">Add class</button
-          ><button @click="reindex">Reindex IDs…</button></NDrawerContent
+          <button @click="createClass">{{ t("Add class") }}</button
+          ><button @click="reindex">
+            {{ t("Reindex IDs…") }}
+          </button></NDrawerContent
         ></NDrawer
       >
       <NDrawer v-model:show="tagsOpen" :width="390"
-        ><NDrawerContent title="Project tags" closable>
+        ><NDrawerContent :title="t('Project tags')" closable>
           <section class="tag-group" aria-labelledby="builtin-states-heading">
             <div class="row">
-              <h3 id="builtin-states-heading">Built-in review states</h3>
-              <span class="readonly-label">Read only</span>
+              <h3 id="builtin-states-heading">
+                {{ t("Built-in review states") }}
+              </h3>
+              <span class="readonly-label">{{ t("Read only") }}</span>
             </div>
             <p class="muted">
-              Review is tracked per task. Excluded applies to the whole image.
+              {{
+                t(
+                  "Review is tracked per task. Excluded applies to the whole image.",
+                )
+              }}
             </p>
             <ul class="builtin-states">
               <li v-for="state in reviewStates" :key="state.value">
                 <i :style="{ background: state.color }" aria-hidden="true"></i>
                 <div>
-                  <strong>{{ state.label }}</strong>
-                  <p class="muted">{{ state.description }}</p>
+                  <strong>{{ t(state.label) }}</strong>
+                  <p class="muted">{{ t(state.description) }}</p>
                 </div>
               </li>
             </ul>
           </section>
           <section class="tag-group" aria-labelledby="custom-tags-heading">
-            <h3 id="custom-tags-heading">Custom image tags</h3>
+            <h3 id="custom-tags-heading">{{ t("Custom image tags") }}</h3>
             <p v-if="!store.meta?.tags.length" class="muted">
-              No custom tags yet.
+              {{ t("No custom tags yet.") }}
             </p>
             <div v-for="c in store.meta?.tags" class="category-editor">
               <input type="color" v-model="c.color" @change="update(c)" /><input
@@ -917,25 +999,36 @@ onBeforeUnmount(() => {
               />
             </div>
             <p class="muted">
-              New tags are registered when added to an image. Their names and
-              colors are editable here.
+              {{
+                t(
+                  "New tags are registered when added to an image. Their names and colors are editable here.",
+                )
+              }}
             </p>
           </section></NDrawerContent
         ></NDrawer
       >
       <NDrawer v-model:show="help" :width="420"
-        ><NDrawerContent title="Keyboard shortcuts" closable
-          ><input v-model="keySearch" placeholder="Search actions or keys…" />
+        ><NDrawerContent :title="t('Keyboard shortcuts')" closable
+          ><input
+            v-model="keySearch"
+            :placeholder="t('Search actions or keys…')"
+          />
           <div
             v-for="[action, key] in shortcuts.filter((row) =>
-              row.join(' ').toLowerCase().includes(keySearch.toLowerCase()),
+              [t(row[0]), t(row[1]), ...row]
+                .join(' ')
+                .toLowerCase()
+                .includes(keySearch.toLowerCase()),
             )"
             class="shortcut"
           >
-            <span>{{ action }}</span
-            ><kbd>{{ key }}</kbd>
+            <span>{{ t(action) }}</span
+            ><kbd>{{ t(key) }}</kbd>
           </div>
-          <p>Single-key shortcuts are disabled while typing.</p></NDrawerContent
+          <p>
+            {{ t("Single-key shortcuts are disabled while typing.") }}
+          </p></NDrawerContent
         ></NDrawer
       >
       <ClassPicker />

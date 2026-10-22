@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, uiError } from "../i18n";
 import { onBeforeUnmount, ref, watch } from "vue";
 import { request } from "../api";
 import { useProject } from "../stores/project";
@@ -73,24 +74,30 @@ onBeforeUnmount(() => {
 <template>
   <div v-if="store.meta" class="statistics-bar" aria-live="polite">
     <strong>{{
-      store.task === "detection" ? "Detection" : "Segmentation"
+      store.task === "detection" ? t("Detection") : t("Segmentation")
     }}</strong>
-    <span v-if="error" :title="error">Statistics unavailable</span>
-    <span v-else-if="!stats || stats.status !== 'ready'"
-      >Loading statistics…</span
-    >
+    <span v-if="error" :title="uiError(error)">{{
+      t("Statistics unavailable")
+    }}</span>
+    <span v-else-if="!stats || stats.status !== 'ready'">{{
+      t("Loading statistics…")
+    }}</span>
     <template v-else>
-      <span v-if="!stats.total">No images</span>
+      <span v-if="!stats.total">{{ t("No images") }}</span>
       <span
         v-else
-        title="Reviewed = Approved + Needs review + Excluded. Automatic masks do not count as reviewed."
-        >Reviewed <b>{{ stats.reviewed }}/{{ stats.total }}</b></span
+        :title="
+          t(
+            'Reviewed = Approved + Needs review + Excluded. Automatic masks do not count as reviewed.',
+          )
+        "
+        >{{ t("Reviewed") }} <b>{{ stats.reviewed }}/{{ stats.total }}</b></span
       >
       <span
         v-for="state in reviewStates"
         :key="state.value"
-        :title="state.description"
-        ><i :style="{ background: state.color }" /> {{ state.label }}
+        :title="t(state.description)"
+        ><i :style="{ background: state.color }" /> {{ t(state.label) }}
         <b>{{ stats.counts[state.value] }}</b></span
       >
     </template>

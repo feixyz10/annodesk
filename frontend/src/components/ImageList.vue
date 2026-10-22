@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, ref } from "vue";
 import { useProject } from "../stores/project";
 const store = useProject(),
@@ -68,16 +69,19 @@ const scroll = ref(0),
 <template>
   <div class="image-controls">
     <div class="row">
-      <strong>Images</strong
+      <strong>{{ t("Images") }}</strong
       ><span class="muted">{{ store.images.length }}</span>
     </div>
-    <input v-model="store.search" placeholder="Search images or folders…" />
+    <input
+      v-model="store.search"
+      :placeholder="t('Search images or folders…')"
+    />
     <div class="row">
       <select v-model="tree">
-        <option :value="true">Tree</option>
-        <option :value="false">Flat</option></select
-      ><button @click="all(true)">Expand all</button
-      ><button @click="all(false)">Collapse all</button>
+        <option :value="true">{{ t("Tree") }}</option>
+        <option :value="false">{{ t("Flat") }}</option></select
+      ><button @click="all(true)">{{ t("Expand all") }}</button
+      ><button @click="all(false)">{{ t("Collapse all") }}</button>
     </div>
   </div>
   <div

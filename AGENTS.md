@@ -9,7 +9,7 @@ features from future targets and hardware validation that has not been performed
 
 - Use Python 3.11+ with uv; repository development uses Python 3.13. Keep `uv.lock` current.
 - CLI commands use **tyro**, never argparse or Typer. Optional model imports stay lazy.
-- Frontend: Vue 3, TypeScript, Pinia, Naive UI and Konva. English UI, light theme.
+- Frontend: Vue 3, TypeScript, Pinia, Naive UI and Konva. English and Simplified Chinese UI, light theme.
 - Keep changes focused. Do not add speculative frameworks, generic plugin systems or unrelated refactors.
 - Never download model weights or install inference dependencies implicitly. Model IDs resolve through
   `ModelRegistry`; `source` is a directory, resolved relative to its JSON then via `HF_MODELS`.
@@ -57,3 +57,7 @@ restore deleted classes, or create unused model classes. New classes and success
 commit in the same journaled transaction. Working IDs may be sparse; exports use a continuous
 copy with `class-id-map.json`. Geometry-only operations must not import Torch or load models.
 Models and Tasks use central windows; project review statistics remain permanently visible.
+Use `frontend/src/i18n.ts` and the locale catalog for UI text, tooltips and accessibility labels.
+Translate at render time so language switching stays reactive; preserve stored enums, project
+class/tag names, model IDs, paths and raw diagnostics. Use whole interpolated messages for counts.
+Keep bilingual wrapping and numeric alignment intact; verify both languages after UI edits.

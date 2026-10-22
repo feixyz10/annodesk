@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, ref } from "vue";
 import { useProject } from "../stores/project";
 const store = useProject(),
@@ -10,7 +11,7 @@ const classes = computed(
     ) ?? [],
 );
 async function add() {
-  const name = prompt("New class name");
+  const name = prompt(t("New class name"));
   if (name) await store.addClass(name);
 }
 </script>
@@ -18,24 +19,28 @@ async function add() {
   <div class="palette">
     <div class="section">
       <div class="row">
-        <strong>Class palette</strong
+        <strong>{{ t("Class palette") }}</strong
         ><button
-          title="Deselect the current object to choose the class for new annotations"
+          :title="
+            t(
+              'Deselect the current object to choose the class for new annotations',
+            )
+          "
           @click="store.selected = null"
         >
-          Default class
+          {{ t("Default class") }}
         </button>
       </div>
       <p class="context">
         {{
           store.object
-            ? "Class for selected object"
-            : "Default for new annotations: " +
+            ? t("Class for selected object")
+            : t("Default for new annotations: ") +
               (store.meta?.classes.find((c) => c.id === store.defaultClass)
-                ?.name ?? "Unassigned")
+                ?.name ?? t("Unassigned"))
         }}
       </p>
-      <input v-model="search" placeholder="Search classes…" />
+      <input v-model="search" :placeholder="t('Search classes…')" />
     </div>
     <div class="class-list">
       <button
@@ -49,8 +54,8 @@ async function add() {
         }"
         :title="
           (store.object
-            ? 'Assign selected annotation to '
-            : 'Default class for new annotations: ') + c.name
+            ? t('Assign selected annotation to ')
+            : t('Default class for new annotations: ')) + c.name
         "
         :disabled="!!store.object?.locked"
         @click="store.assign(c.id)"
@@ -59,6 +64,8 @@ async function add() {
         ><small>ID {{ c.index }}</small>
       </button>
     </div>
-    <div class="section"><button @click="add">Add class</button></div>
+    <div class="section">
+      <button @click="add">{{ t("Add class") }}</button>
+    </div>
   </div>
 </template>

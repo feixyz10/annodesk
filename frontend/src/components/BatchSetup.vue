@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, uiError } from "../i18n";
 import { computed, ref, watch } from "vue";
 import { NModal } from "naive-ui";
 import {
@@ -135,31 +136,41 @@ async function start() {
     :show="show"
     @update:show="emit('update:show', $event)"
     preset="card"
-    title="Batch processing"
+    :title="t('Batch processing')"
     style="width: 720px; max-width: 90vw; max-height: 80vh; overflow: auto"
   >
     <div class="batch-fields">
       <label
-        >Operation<select v-model="operation" :disabled="!!busy">
-          <option value="detection">Detect boxes</option>
-          <option value="segmentation">Segment existing boxes</option>
-          <option value="boxes_from_masks">Boxes from masks</option>
+        >{{ t("Operation")
+        }}<select v-model="operation" :disabled="!!busy">
+          <option value="detection">{{ t("Detect boxes") }}</option>
+          <option value="segmentation">
+            {{ t("Segment existing boxes") }}
+          </option>
+          <option value="boxes_from_masks">{{ t("Boxes from masks") }}</option>
         </select></label
       ><label
-        >Image range<select v-model="range" :disabled="!!busy">
+        >{{ t("Image range")
+        }}<select v-model="range" :disabled="!!busy">
           <option value="all">
-            All project images ({{ store.images.length }})
+            {{
+              t("All project images ({count})", { count: store.images.length })
+            }}
           </option>
           <option value="filtered">
-            Current search results ({{ store.filtered.length }})
+            {{
+              t("Current search results ({count})", {
+                count: store.filtered.length,
+              })
+            }}
           </option>
         </select></label
       >
     </div>
     <section>
       <h3>
-        Review states ·
-        {{ operation === "segmentation" ? "Segmentation" : "Detection" }}
+        {{ t("Review states ·") }}
+        {{ operation === "segmentation" ? t("Segmentation") : t("Detection") }}
       </h3>
       <div class="batch-states">
         <label
@@ -174,32 +185,37 @@ async function start() {
             type="checkbox"
             :value="state.value"
             :disabled="!!busy"
-          />{{ state.label }}</label
+          />{{ t(state.label) }}</label
         >
       </div>
       <p class="muted">
-        Excluded images are always skipped. Selecting Approved does not permit
-        overwriting existing manual annotations.
+        {{
+          t(
+            "Excluded images are always skipped. Selecting Approved does not permit overwriting existing manual annotations.",
+          )
+        }}
       </p>
     </section>
     <section v-if="operation !== 'boxes_from_masks'">
       <div class="row">
-        <h3>Model · {{ payload.model || "Not configured" }}</h3>
+        <h3>{{ t("Model ·") }} {{ payload.model || t("Not configured") }}</h3>
         <button :disabled="!!busy" @click="emit('models')">
-          Model settings
+          {{ t("Model settings") }}
         </button>
       </div>
       <p v-if="operation === 'detection'" class="muted">
-        Confidence {{ payload.confidence }} · NMS IoU {{ payload.iou }} ·
+        {{ t("Confidence") }} {{ payload.confidence }} {{ t("· NMS IoU") }}
+        {{ payload.iou }} ·
         {{
           payload.allow_new_classes
-            ? "Add extra classes when detected"
-            : "Discard classes outside the project"
+            ? t("Add extra classes when detected")
+            : t("Discard classes outside the project")
         }}
       </p>
       <div class="batch-fields">
         <label
-          >Device type<select v-model="deviceType" :disabled="!!busy">
+          >{{ t("Device type")
+          }}<select v-model="deviceType" :disabled="!!busy">
             <option
               v-for="device in ['auto', 'cuda', 'cpu', 'mps']"
               :key="device"
@@ -208,73 +224,85 @@ async function start() {
             </option>
           </select></label
         ><label
-          >Logical CUDA devices<input
+          >{{ t("Logical CUDA devices")
+          }}<input
             v-model="devices"
             :disabled="!!busy"
-            placeholder="auto or 0,1" /></label
+            :placeholder="t('auto or 0,1')" /></label
         ><label
-          >Workers<input
+          >{{ t("Workers")
+          }}<input
             v-model="workers"
             :disabled="!!busy"
-            placeholder="auto or positive integer"
+            :placeholder="t('auto or positive integer')"
         /></label>
       </div>
       <p class="muted">
-        Each worker holds a model copy. Additional workers on the same device
-        require more memory.
+        {{
+          t(
+            "Each worker holds a model copy. Additional workers on the same device require more memory.",
+          )
+        }}
       </p>
     </section>
     <section v-if="operation === 'detection'">
       <label
-        >Write policy<select v-model="writePolicy" :disabled="!!busy">
-          <option value="fill_empty">Empty images only</option>
-          <option value="append">Append with duplicate checks</option>
+        >{{ t("Write policy")
+        }}<select v-model="writePolicy" :disabled="!!busy">
+          <option value="fill_empty">{{ t("Empty images only") }}</option>
+          <option value="append">
+            {{ t("Append with duplicate checks") }}
+          </option>
         </select></label
       >
     </section>
     <section v-if="operation === 'boxes_from_masks'">
       <label
         ><input v-model="recalculate" type="checkbox" :disabled="!!busy" />
-        Recalculate existing unlocked boxes</label
+        {{ t("Recalculate existing unlocked boxes") }}</label
       >
       <p class="muted">
-        Default: create missing boxes only. CPU geometry; no model or GPU. Masks
-        and instance classes are preserved.
+        {{
+          t(
+            "Default: create missing boxes only. CPU geometry; no model or GPU. Masks and instance classes are preserved.",
+          )
+        }}
       </p>
     </section>
     <section v-if="preview" class="batch-preview">
-      <h3>Scope preview</h3>
+      <h3>{{ t("Scope preview") }}</h3>
       <dl>
-        <dt>Input images</dt>
+        <dt>{{ t("Input images") }}</dt>
         <dd>{{ preview.input_total }}</dd>
-        <dt>Excluded</dt>
+        <dt>{{ t("Excluded") }}</dt>
         <dd>{{ preview.counts.excluded }}</dd>
-        <dt>Outside selected review states</dt>
+        <dt>{{ t("Outside selected review states") }}</dt>
         <dd>{{ preview.counts.review_state }}</dd>
-        <dt>No eligible objects / existing labels</dt>
+        <dt>{{ t("No eligible objects / existing labels") }}</dt>
         <dd>{{ preview.counts.no_content }}</dd>
-        <dt>Invalid inputs</dt>
+        <dt>{{ t("Invalid inputs") }}</dt>
         <dd>{{ preview.counts.invalid }}</dd>
-        <dt>Images to process</dt>
+        <dt>{{ t("Images to process") }}</dt>
         <dd>
           <strong>{{ preview.total }}</strong>
         </dd>
       </dl>
       <p v-if="check?.compatibility">
-        Classes compatible ·
-        {{ check.compatibility.extra_classes.length }} extra model classes
+        {{ t("Classes compatible ·") }}
+        {{ check.compatibility.extra_classes.length }}
+        {{ t("extra model classes") }}
       </p>
       <p v-for="item in preview.errors" :key="item.image">
         {{ item.image }}: {{ item.error }}
       </p>
       <p v-if="!preview.total">
-        No images require processing with these settings.
+        {{ t("No images require processing with these settings.") }}
       </p>
     </section>
-    <p v-if="busy" role="status">{{ busy }}</p>
-    <p v-if="error" role="alert">{{ error }}</p>
+    <p v-if="busy" role="status">{{ t(busy) }}</p>
+    <p v-if="error" role="alert">{{ uiError(error) }}</p>
     <div class="batch-actions">
-      <button @click="emit('update:show', false)">Cancel</button
+      <button @click="emit('update:show', false)">{{ t("Cancel") }}</button
       ><button
         :disabled="
           !!busy ||
@@ -283,13 +311,13 @@ async function start() {
         "
         @click="inspect"
       >
-        Preview scope</button
+        {{ t("Preview scope") }}</button
       ><button
         class="primary"
         :disabled="!!busy || !preview?.total"
         @click="start"
       >
-        Start
+        {{ t("Start") }}
       </button>
     </div>
   </NModal>

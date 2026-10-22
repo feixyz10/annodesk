@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 export interface Job {
   id: string;
   kind?: string;
@@ -51,7 +52,10 @@ export function elapsed(job: Job) {
         : job.elapsed_seconds || 0,
     ),
   );
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return t("{minutes}m {seconds}s", {
+    minutes: Math.floor(seconds / 60),
+    seconds: seconds % 60,
+  });
 }
 export function isPreparing(job: Job) {
   return ["preparing", "preflight", "loading", "packaging"].includes(

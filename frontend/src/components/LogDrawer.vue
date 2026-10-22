@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, uiError, formatTime } from "../i18n";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { NDrawer, NDrawerContent } from "naive-ui";
 import { apiBase, request } from "../api";
@@ -182,19 +183,19 @@ onBeforeUnmount(() => {
     :max-width="1200"
     style="max-width: 100vw"
   >
-    <NDrawerContent title="Logs" closable>
+    <NDrawerContent :title="t('Logs')" closable>
       <div class="log-controls">
-        <select v-model="scope" aria-label="Log scope">
-          <option value="service">Service</option>
+        <select v-model="scope" :aria-label="t('Log scope')">
+          <option value="service">{{ t("Service") }}</option>
           <option value="project" :disabled="!store.meta">
-            Current project
+            {{ t("Current project") }}
           </option>
         </select>
-        <select v-model="comparison" aria-label="Level comparison">
+        <select v-model="comparison" :aria-label="t('Level comparison')">
           <option value="gte">≥</option>
           <option value="eq">=</option>
         </select>
-        <select v-model="level" aria-label="Log level">
+        <select v-model="level" :aria-label="t('Log level')">
           <option
             v-for="item in [
               [20, 'INFO'],
@@ -209,38 +210,44 @@ onBeforeUnmount(() => {
           </option>
         </select>
         <button @click="paused = !paused">
-          {{ paused ? "Resume" : "Pause" }}</button
-        ><button @click="clearView">Clear view</button
-        ><button @click="copy">Copy</button>
+          {{ paused ? t("Resume") : t("Pause") }}</button
+        ><button @click="clearView">{{ t("Clear view") }}</button
+        ><button @click="copy">{{ t("Copy") }}</button>
         <label
-          ><input v-model="autoScroll" type="checkbox" /> Auto-scroll</label
+          ><input v-model="autoScroll" type="checkbox" />
+          {{ t("Auto-scroll") }}</label
         >
         <a
           :href="apiBase + '/logs/download'"
           download
-          title="Download the current backend log file"
-          >Download</a
+          :title="t('Download the current backend log file')"
+          >{{ t("Download") }}</a
         >
       </div>
       <p class="muted">
-        Current backend session · {{ rows.length }}/1000 events. Independent CLI
-        sessions are available in their log files.
+        {{ t("Current backend session ·") }} {{ rows.length
+        }}{{
+          t(
+            "/1000 events. Independent CLI sessions are available in their log files.",
+          )
+        }}
       </p>
       <p v-if="gap" role="status">
-        Some earlier events are no longer available.
+        {{ t("Some earlier events are no longer available.") }}
       </p>
       <p v-if="error" role="status">
-        {{ error }} <button @click="connect()">Retry</button>
+        {{ uiError(error) }}
+        <button @click="connect()">{{ t("Retry") }}</button>
       </p>
       <div
         ref="viewport"
         class="log-viewport"
         @scroll="scroll = ($event.target as HTMLElement).scrollTop"
         role="log"
-        aria-label="Important service events"
+        :aria-label="t('Important service events')"
       >
         <p v-if="!rows.length" class="muted">
-          {{ paused ? "Paused" : "No matching events yet" }}
+          {{ paused ? t("Paused") : t("No matching events yet") }}
         </p>
         <div :style="{ height: rows.length * 72 + 'px', position: 'relative' }">
           <div
@@ -250,14 +257,14 @@ onBeforeUnmount(() => {
             :style="{ top: item.top + 'px' }"
           >
             <time :title="item.row.timestamp">{{
-              new Date(item.row.timestamp).toLocaleTimeString()
+              formatTime(item.row.timestamp)
             }}</time>
             <b :class="'level-' + item.row.level_name.toLowerCase()">{{
               item.row.level_name
             }}</b>
             <span :title="item.row.message"
               >{{ item.row.message
-              }}{{ item.row.truncated ? "… [see file]" : "" }}</span
+              }}{{ item.row.truncated ? t("… [see file]") : "" }}</span
             >
           </div>
         </div>

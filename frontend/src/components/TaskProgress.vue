@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, statusLabel } from "../i18n";
 defineProps<{
   completed: number;
   total: number;
@@ -13,22 +14,22 @@ defineProps<{
         running &&
         ['preflight', 'preparing', 'loading', 'packaging'].includes(phase)
       "
-      :aria-label="phase"
+      :aria-label="statusLabel(phase)"
     />
     <progress
       v-else
       :value="completed"
       :max="Math.max(1, total)"
-      aria-label="Finished images"
+      :aria-label="t('Finished images')"
     />
     <span class="muted" role="status">{{
       phase === "loading"
-        ? "Loading models…"
+        ? t("Loading models…")
         : phase === "preflight"
-          ? "Scanning annotations…"
+          ? t("Scanning annotations…")
           : phase === "packaging"
-            ? "Writing export metadata…"
-            : phase
+            ? t("Writing export metadata…")
+            : statusLabel(phase)
     }}</span>
   </div>
 </template>
