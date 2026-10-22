@@ -19,13 +19,18 @@ from annodesk.storage import Project, atomic_write
 
 
 def new_report(dataset: Project, body: SegmentRequest) -> dict:
-    ids = (
-        list(dict.fromkeys(body.image_ids)) if body.image_ids is not None else list(dataset.entries)
-    )
-    if body.image_ids is not None and (not ids or any(i not in dataset.entries for i in ids)):
-        raise ValueError("Choose a non-empty image range belonging to this project")
+    with dataset.lock:
+        ids = (
+            list(dict.fromkeys(body.image_ids))
+            if body.image_ids is not None
+            else list(dataset.entries)
+        )
+        if body.image_ids is not None and (not ids or any(i not in dataset.entries for i in ids)):
+            raise ValueError("Choose a non-empty image range belonging to this project")
+        paths = {image_id: dataset.entries[image_id]["path"] for image_id in ids}
     return {
         "operation": body.operation,
+        "image_paths": paths,
         "skip_reasons": {"excluded": 0, "review_state": 0, "no_content": 0},
         "boxes_added": 0,
         "boxes_updated": 0,
@@ -64,6 +69,14 @@ def run_batch(
 ):
     project_id = dataset.metadata["id"]
     context = {"project_id": project_id, "job_id": report.get("id")}
+    with dataset.lock:
+        # Older persisted reports lack paths. Never depend on mutable entries
+        # while recording a result (the image may have been removed externally).
+        if "image_paths" not in report:
+            report["image_paths"] = {
+                image_id: entry["path"] for image_id, entry in dataset.entries.items()
+            }
+        paths = report["image_paths"]
 
     def class_snapshot():
         with dataset.lock:
@@ -76,11 +89,12 @@ def run_batch(
             )
 
     def failed(image_id, annotation, error, metrics=None):
+        path = paths.get(image_id, image_id)
         if error:
-            report["failed"].append({"image": dataset.entries[image_id]["path"], "error": error})
+            report["failed"].append({"image": path, "error": error})
             events.emit(
                 "ERROR",
-                f"{dataset.entries[image_id]['path']}: {error}",
+                f"{path}: {error}",
                 event_type="image_failed",
                 error_code=error,
                 **context,
@@ -91,7 +105,7 @@ def run_batch(
                 report["project_classes"] = class_snapshot()
         report.setdefault("results", []).append(
             {
-                "image": dataset.entries[image_id]["path"],
+                "image": path,
                 "status": "failed" if error else "saved",
                 "error": error,
                 **(metrics or {"elapsed_seconds": 0, "attempts": 0}),
@@ -147,7 +161,7 @@ def run_batch(
             config = registry.config.model_dump()
             for entry in config["models"]:
                 if entry["id"] == model:
-                    entry["source"] = str(weights.parent)
+                    entry["source"] = str(registry.resolve(model))
             report.update(
                 plan=plan.to_dict(),
                 model=model,
@@ -192,6 +206,8 @@ def run_batch(
                     break
                 try:
                     with dataset.lock:
+                        if image_id not in dataset.entries:
+                            raise ValueError("Image removed from project during processing")
                         annotation = dataset.annotation(image_id, materialize=False)
                     if not eligible(annotation, body):
                         reason = (
@@ -225,6 +241,8 @@ def run_batch(
                 start = time.monotonic()
                 try:
                     with dataset.lock:
+                        if image_id not in dataset.entries:
+                            raise ValueError("Image removed from project during processing")
                         annotation = dataset.annotation(image_id)
                         if not eligible(annotation, body):
                             raise ValueError(
@@ -298,7 +316,7 @@ def run_batch(
 def segment_dataset(
     project: Path,
     model: str,
-    registry: ModelRegistry,
+    registry: ModelRegistry | None,
     options: ExecutionOptions | None = None,
     events: EventLog | None = None,
     *,

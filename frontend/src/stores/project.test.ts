@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { instance, request, type Annotation, type ProjectMeta } from "../api";
 import { useProject } from "./project";
+import { setLocale } from "../i18n";
 vi.mock("../api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api")>()),
   request: vi.fn(),
@@ -46,15 +47,136 @@ function deferred<T>() {
   return { promise, resolve };
 }
 beforeEach(() => {
+  setLocale("en");
   setActivePinia(createPinia());
   mock.mockReset();
   vi.useFakeTimers();
 });
 afterEach(() => {
+  setLocale("en");
   vi.clearAllTimers();
   vi.useRealTimers();
 });
 describe("annotation concurrency", () => {
+  it("rejects discovery of a new session without rebinding old annotations", async () => {
+    const s = initialized();
+    s.meta!.session = "original";
+    s.annotation!.notes = "unsaved original annotation";
+    const original = JSON.stringify(s.annotation);
+    mock.mockResolvedValue({
+      ...metadata(),
+      root: "/copy",
+      session: "replacement",
+    });
+    await expect(s.refresh()).rejects.toThrow("Project changed");
+    expect(s.meta!.session).toBe("original");
+    expect(s.meta!.root).toBe("/tmp/p");
+    expect(JSON.stringify(s.annotation)).toBe(original);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not attach a late class response to a copied project with the same UUID", async () => {
+    const s = initialized(),
+      pending = deferred<any>();
+    s.meta!.session = "A";
+    mock.mockImplementation(async () => pending.promise);
+    const add = s.addClass("Old project class");
+    s.meta = { ...s.meta!, session: "B" };
+    pending.resolve({
+      id: "old-class",
+      index: 1,
+      name: "Old project class",
+      color: "#123456",
+    });
+    await add;
+    expect(s.meta!.classes).toHaveLength(1);
+    expect(s.defaultClass).not.toBe("old-class");
+  });
+  it("does not silently adopt another runtime session during metadata refresh", async () => {
+    const s = initialized();
+    s.meta!.session = "A";
+    mock.mockResolvedValue({
+      ...metadata(),
+      session: "B",
+      root: "/another-copy",
+    });
+    await s.refreshMeta();
+    expect(s.meta!.session).toBe("A");
+    expect(s.meta!.root).toBe("/tmp/p");
+  });
+  it("marks project opening as navigation and prevents overlapping opens", async () => {
+    const s = initialized(),
+      pending = deferred<any>();
+    mock.mockImplementation(async (path) => {
+      if (path === "/project/open") return pending.promise;
+      if (path === "/project") return { ...metadata("new"), session: "new" };
+      return { items: [], total: 0 };
+    });
+    const opening = s.open("/new");
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(s.navigating).toBe(true);
+    await s.open("/overlapping");
+    expect(
+      mock.mock.calls.filter(([path]) => path === "/project/open"),
+    ).toHaveLength(1);
+    pending.resolve({});
+    await opening;
+    expect(s.navigating).toBe(false);
+    expect(s.meta!.session).toBe("new");
+  });
+  it("ignores a metadata response from a project that is no longer open", async () => {
+    const s = initialized(),
+      pending = deferred<ProjectMeta>();
+    mock.mockReturnValue(pending.promise);
+    const refresh = s.refreshMeta();
+    s.meta = metadata("other");
+    pending.resolve(metadata());
+    await refresh;
+    expect(s.meta.id).toBe("other");
+  });
+
+  it.each(
+    (["segment", "detect", "boxesFromMasks"] as const).flatMap((operation) =>
+      (["en", "zh-CN"] as const).map(
+        (language) => [operation, language] as const,
+      ),
+    ),
+  )(
+    "discards old %s responses after navigating away and back in %s",
+    async (operation, language) => {
+      setLocale(language);
+      const s = initialized(),
+        pending = deferred<Annotation>();
+      const original = JSON.parse(JSON.stringify(s.annotation));
+      mock.mockImplementation(async (path) =>
+        path.endsWith("/annotation") ? original : pending.promise,
+      );
+      const run = s[operation]();
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+      await s.load(s.images[1]);
+      await s.load(s.images[0]);
+      pending.resolve({ ...original, revision: 1, notes: "stale result" });
+      await run;
+      expect(s.current?.id).toBe("a");
+      expect(s.annotation!.notes).toBe("");
+    },
+  );
+  it("does not roll back an inference result when an older refresh returns late", async () => {
+    const s = initialized(),
+      pending = deferred<Annotation>();
+    const original = JSON.parse(JSON.stringify(s.annotation));
+    mock.mockImplementation(async (path) =>
+      path.endsWith("/annotation")
+        ? pending.promise
+        : { ...original, revision: 1, notes: "inference saved" },
+    );
+    const refresh = s.refreshCurrent();
+    await s.segment();
+    pending.resolve(original);
+    await refresh;
+    expect(s.annotation!.revision).toBe(1);
+    expect(s.annotation!.notes).toBe("inference saved");
+  });
   it("does not apply image A inference to image B", async () => {
     const s = initialized(),
       pending = deferred<Annotation>();
@@ -202,6 +324,58 @@ describe("quick class assignment", () => {
 });
 
 describe("assisted annotation", () => {
+  it("marks a retained mask for review after a manual box edit and supports undo", () => {
+    const s = initialized();
+    const obj = s.annotation!.instances[0];
+    obj.mask = { size: [10, 10], counts: "mask" };
+    s.editBox(obj.id, [2, 2, 9, 9]);
+    expect(obj.box).toEqual([2, 2, 9, 9]);
+    expect(s.annotation!.detection_review).toBe("pending");
+    expect(s.annotation!.segmentation_review).toBe("uncertain");
+    expect(obj.mask).toEqual({ size: [10, 10], counts: "mask" });
+    s.undo();
+    expect(s.annotation!.instances[0].box).toEqual([1, 1, 8, 8]);
+  });
+  it("protects locked boxes and rejects degenerate coordinate edits", () => {
+    const s = initialized();
+    const obj = s.annotation!.instances[0];
+    obj.locked = true;
+    s.editBox(obj.id, [2, 2, 9, 9]);
+    expect(obj.box).toEqual([1, 1, 8, 8]);
+    obj.locked = false;
+    s.editBox(obj.id, [9, 1, 8, 8]);
+    s.editBox(obj.id, [NaN, 1, 8, 8]);
+    expect(obj.box).toEqual([1, 1, 8, 8]);
+    expect(s.dirty).toBe(false);
+    s.editBox(obj.id, [-1, 1, 12, 8]);
+    expect(obj.box).toEqual([0, 1, 10, 8]);
+  });
+  it("leaves segmentation review alone for box-only edits", () => {
+    const s = initialized();
+    s.editBox(s.annotation!.instances[0].id, [2, 2, 9, 9]);
+    expect(s.annotation!.segmentation_review).toBe("ok");
+  });
+  it("can undo an ordinary segmentation result", async () => {
+    const s = initialized();
+    const original = JSON.parse(JSON.stringify(s.annotation));
+    mock.mockResolvedValue({
+      ...original,
+      revision: 1,
+      segmentation_review: "pending",
+      instances: [
+        {
+          ...original.instances[0],
+          mask: { size: [10, 10], counts: "new-mask" },
+        },
+      ],
+    });
+    await s.segment();
+    expect(s.annotation!.instances[0].mask).not.toBeNull();
+    s.undo();
+    expect(s.annotation!.instances[0].mask).toBeNull();
+    expect(s.annotation!.detection_review).toBe("ok");
+    expect(s.annotation!.revision).toBe(1);
+  });
   it("changes detection geometry without clearing segmentation review", () => {
     const s = initialized();
     s.annotation!.instances[0].box = [1, 1, 9, 9];
@@ -412,6 +586,47 @@ describe("mask candidates", () => {
     await s.applyCandidate();
     expect(s.candidates?.phase).toBe("error");
     expect(JSON.stringify(s.annotation)).toBe(original);
+    expect(s.history).toHaveLength(0);
+  });
+  it("discards a late Apply after navigating away and back", async () => {
+    const s = ready(),
+      pending = deferred<Annotation>();
+    const original = JSON.parse(JSON.stringify(s.annotation));
+    mock.mockImplementation(async (path) => {
+      if (path.endsWith("/mask-candidates")) return proposal(s);
+      if (path.endsWith("/apply")) return pending.promise;
+      return original;
+    });
+    await s.generateCandidates();
+    const apply = s.applyCandidate();
+    await flush();
+    await s.load(s.images[1]);
+    await s.load(s.images[0]);
+    pending.resolve({
+      ...original,
+      revision: 1,
+      notes: "stale candidate apply",
+    });
+    await apply;
+    expect(s.current?.id).toBe("a");
+    expect(s.annotation!.notes).toBe("");
+    expect(s.history).toHaveLength(0);
+  });
+  it("clears a completed Apply session when a newer revision is already displayed", async () => {
+    const s = ready(),
+      pending = deferred<Annotation>();
+    const original = JSON.parse(JSON.stringify(s.annotation));
+    mock.mockImplementation(async (path) =>
+      path.endsWith("/apply") ? pending.promise : proposal(s),
+    );
+    await s.generateCandidates();
+    const apply = s.applyCandidate();
+    await flush();
+    s.annotation!.revision = 2;
+    pending.resolve({ ...original, revision: 1 });
+    await apply;
+    expect(s.annotation!.revision).toBe(2);
+    expect(s.candidates).toBeNull();
     expect(s.history).toHaveLength(0);
   });
 });

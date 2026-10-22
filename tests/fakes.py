@@ -35,3 +35,23 @@ class Adapter:
 
 def executor(registry, model, plan, events):
     return ImageExecutor(registry, model, plan, events, adapter_factory=Adapter)
+
+
+class GatedAdapter(Adapter):
+    def predict(self, path, model, *prompts):
+        result = super().predict(path, model, *prompts)
+        if path.stem == "0":
+            import time
+
+            root = self.registry.path.parent
+            (root / "worker-entered").write_text(str(os.getpid()))
+            deadline = time.monotonic() + 15
+            while not (root / "worker-release").exists():
+                if time.monotonic() >= deadline:
+                    raise ValueError("Test worker release timed out")
+                time.sleep(0.01)
+        return result
+
+
+def gated_executor(registry, model, plan, events):
+    return ImageExecutor(registry, model, plan, events, adapter_factory=GatedAdapter)

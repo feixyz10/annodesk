@@ -1,20 +1,16 @@
 /** English source messages are the fallback; project data and diagnostics stay untouched. */
 import { ref, watch } from "vue";
 import chinese from "./locales/zh-CN.json";
+import { readPreference, writePreference } from "./preferences";
 export type Locale = "en" | "zh-CN";
 export const localeStorageKey = "annodesk.locale";
 export const messages: Record<string, string> = chinese;
 export function resolveLocale(value: unknown): Locale {
   return value === "zh-CN" ? "zh-CN" : "en";
 }
-function initialLocale(): Locale {
-  try {
-    return resolveLocale(globalThis.localStorage?.getItem(localeStorageKey));
-  } catch {
-    return "en";
-  }
-}
-export const locale = ref<Locale>(initialLocale());
+export const locale = ref<Locale>(
+  resolveLocale(readPreference(localeStorageKey)),
+);
 export function setLocale(value: unknown) {
   locale.value = resolveLocale(value);
 }
@@ -22,11 +18,7 @@ watch(
   locale,
   (value) => {
     if (typeof document !== "undefined") document.documentElement.lang = value;
-    try {
-      globalThis.localStorage?.setItem(localeStorageKey, value);
-    } catch {
-      /* Private browser storage may be disabled. */
-    }
+    writePreference(localeStorageKey, value);
   },
   { immediate: true, flush: "sync" },
 );

@@ -5,6 +5,7 @@ import signal
 from pathlib import Path
 
 from annodesk.classes import class_names, read_classes
+from annodesk.images import inference_image
 from annodesk.models import ModelConfig, ModelRegistry
 from annodesk.offline import offline_inference
 
@@ -69,7 +70,7 @@ class DetectionAdapter:
         self.load(body.model)
         with offline_inference():
             results = self.model.predict(
-                str(path),
+                inference_image(path),
                 device=self.model.device,
                 conf=body.confidence,
                 iou=body.iou,

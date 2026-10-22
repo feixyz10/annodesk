@@ -59,6 +59,11 @@ describe("interface languages", () => {
     expect(
       uiError("Error: Clipboard unavailable; select and copy the log text."),
     ).toContain("剪贴板");
+    expect(
+      uiError(
+        "Error: Project changed in another browser; reopen the intended project",
+      ),
+    ).toBe("项目已在另一页面切换，请重新打开目标项目");
     expect(uiError("checkpoint unavailable: /srv/model/best.pt")).toBe(
       "checkpoint unavailable: /srv/model/best.pt",
     );

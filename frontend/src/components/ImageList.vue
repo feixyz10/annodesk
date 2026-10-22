@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t } from "../i18n";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useProject } from "../stores/project";
 const store = useProject(),
   tree = ref(true),
@@ -63,8 +63,38 @@ function all(open: boolean) {
       }
     }
 }
-const scroll = ref(0),
-  start = computed(() => Math.max(0, Math.floor(scroll.value / 31) - 4));
+const rowHeight = 31,
+  windowSize = 40,
+  list = ref<HTMLDivElement>(),
+  scroll = ref(0),
+  start = computed(() =>
+    Math.min(
+      Math.max(0, rows.value.length - windowSize),
+      Math.max(0, Math.floor(scroll.value / rowHeight) - 4),
+    ),
+  );
+function setScroll(value: number) {
+  scroll.value = value;
+  if (list.value) list.value.scrollTop = value;
+}
+watch([() => store.search, tree, expanded], () => setScroll(0), { deep: true });
+watch(
+  [() => store.meta?.session, () => store.meta?.id, () => store.meta?.root],
+  () => {
+    expanded.value.clear();
+    setScroll(0);
+  },
+);
+watch(
+  () => rows.value.length,
+  (count) => {
+    const maximum = Math.max(
+      0,
+      count * rowHeight - (list.value?.clientHeight ?? rowHeight),
+    );
+    if (scroll.value > maximum) setScroll(maximum);
+  },
+);
 </script>
 <template>
   <div class="image-controls">
@@ -85,12 +115,13 @@ const scroll = ref(0),
     </div>
   </div>
   <div
+    ref="list"
     class="file-list"
     @scroll="scroll = ($event.target as HTMLElement).scrollTop"
   >
-    <div :style="{ height: start * 31 + 'px' }"></div>
+    <div :style="{ height: start * rowHeight + 'px' }"></div>
     <button
-      v-for="row in rows.slice(start, start + 40)"
+      v-for="row in rows.slice(start, start + windowSize)"
       :key="row.key"
       class="file"
       :class="{ active: row.id === store.current?.id }"
@@ -108,7 +139,10 @@ const scroll = ref(0),
       ><span>{{ row.name }}</span>
     </button>
     <div
-      :style="{ height: Math.max(0, rows.length - start - 40) * 31 + 'px' }"
+      :style="{
+        height:
+          Math.max(0, rows.length - start - windowSize) * rowHeight + 'px',
+      }"
     ></div>
   </div>
 </template>

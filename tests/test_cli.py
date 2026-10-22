@@ -1,6 +1,7 @@
 import subprocess
 import sys
 
+import pytest
 from fastapi.testclient import TestClient
 
 from annodesk.app import create_app
@@ -13,6 +14,47 @@ def test_cli_help_does_not_import_torch():
     assert result.returncode == 0
     assert "serve" in result.stdout
     assert "doctor" in result.stdout
+
+
+@pytest.mark.parametrize("config_state", ["missing", "broken"])
+def test_geometry_cli_does_not_require_model_configuration(tmp_path, monkeypatch, config_state):
+    import json
+
+    from PIL import Image
+
+    from annodesk.domain import Instance
+    from annodesk.storage import Project
+
+    (tmp_path / "images").mkdir()
+    Image.new("RGB", (20, 10)).save(tmp_path / "images/a.png")
+    project = Project(tmp_path)
+    category = project.add_category("Object")
+    image_id = next(iter(project.entries))
+    ann = project.annotation(image_id)
+    ann.instances = [Instance(class_id=category["id"], polygons=[[[1, 1], [8, 1], [8, 8]]])]
+    project.save(image_id, ann)
+    config = tmp_path / "models.json"
+    if config_state == "broken":
+        config.write_text("not valid json")
+    monkeypatch.setenv("ANNODESK_MODELS_CONFIG", str(config))
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "annodesk",
+            "boxes-from-masks",
+            "--project",
+            str(tmp_path),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["boxes_added"] == 1
+    assert Project(tmp_path).annotation(image_id).instances[0].box == [1, 1, 8, 8]
 
 
 def test_static_runtime_configuration():

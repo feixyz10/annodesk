@@ -8,11 +8,11 @@ import threading
 from pathlib import Path
 
 import yaml
-from PIL import Image
 
 from annodesk.colors import choose_color
 from annodesk.domain import Annotation, Instance, uid
-from annodesk.masks import decode_mask
+from annodesk.images import raster_size
+from annodesk.masks import contours, decode_mask
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
@@ -89,9 +89,19 @@ class Project:
             operation.unlink()
 
     def transaction(self, outputs: dict[Path, str]):
-        values = {path.relative_to(self.root).as_posix(): text for path, text in outputs.items()}
-        atomic_write(self.private / "pending.json", json.dumps(values))
-        self._recover()
+        with self.lock:
+            self.ensure_writable()
+            values = {
+                path.relative_to(self.root).as_posix(): text for path, text in outputs.items()
+            }
+            atomic_write(self.private / "pending.json", json.dumps(values))
+            self._recover()
+
+    def ensure_writable(self):
+        if (self.private / "pending.json").exists():
+            raise RevisionConflict(
+                "An unfinished project transaction requires recovery; restart the backend before writing."
+            )
 
     def _import_classes(self):
         config = self.root / "data.yaml"
@@ -164,68 +174,80 @@ class Project:
         return list(self.entries.values())
 
     def annotation(self, image_id: str, *, materialize=True) -> Annotation:
-        path = self.annotation_path(image_id)
-        if path.exists():
-            return Annotation.model_validate_json(path.read_text())
-        with Image.open(self.image_path(image_id)) as image:
-            width, height = image.size
-        ann = Annotation()
-        classes = {c["index"]: c["id"] for c in self.metadata["classes"]}
-        for segmentation in (False, True):
-            label = self.label_path(image_id, segmentation)
-            if not label.exists():
-                continue
-            for number, line in enumerate(label.read_text().splitlines(), 1):
-                if not line.strip():
+        with self.lock:
+            path = self.annotation_path(image_id)
+            if path.exists():
+                return Annotation.model_validate_json(path.read_text())
+            width, height = self.image_size(image_id)
+            ann = Annotation()
+            classes = {c["index"]: c["id"] for c in self.metadata["classes"]}
+            for segmentation in (False, True):
+                label = self.label_path(image_id, segmentation)
+                if not label.exists():
                     continue
-                try:
-                    parts = line.split()
-                    category = classes[int(parts[0])]
-                    coords = [float(v) for v in parts[1:]]
-                    if any(not math.isfinite(v) or not 0 <= v <= 1 for v in coords):
-                        raise ValueError("Coordinates must be finite and normalized")
-                    if segmentation:
-                        if len(coords) < 6 or len(coords) % 2:
-                            raise ValueError("Polygon must have at least three points")
-                        points = [
-                            [coords[i] * width, coords[i + 1] * height]
-                            for i in range(0, len(coords), 2)
-                        ]
-                        ann.instances.append(
-                            Instance(class_id=category, polygons=[points], source="yolo")
-                        )
-                    else:
-                        if len(coords) != 4:
-                            raise ValueError("Detection annotation must have four coordinates")
-                        x, y, w, h = coords
-                        ann.instances.append(
-                            Instance(
-                                class_id=category,
-                                box=[
-                                    (x - w / 2) * width,
-                                    (y - h / 2) * height,
-                                    (x + w / 2) * width,
-                                    (y + h / 2) * height,
-                                ],
-                                source="yolo",
+                for number, line in enumerate(label.read_text().splitlines(), 1):
+                    if not line.strip():
+                        continue
+                    try:
+                        parts = line.split()
+                        category = classes[int(parts[0])]
+                        coords = [float(v) for v in parts[1:]]
+                        if any(not math.isfinite(v) or not 0 <= v <= 1 for v in coords):
+                            raise ValueError("Coordinates must be finite and normalized")
+                        if segmentation:
+                            if len(coords) < 6 or len(coords) % 2:
+                                raise ValueError("Polygon must have at least three points")
+                            points = [
+                                [coords[i] * width, coords[i + 1] * height]
+                                for i in range(0, len(coords), 2)
+                            ]
+                            ann.instances.append(
+                                Instance(class_id=category, polygons=[points], source="yolo")
                             )
-                        )
-                except (ValueError, KeyError) as error:
-                    raise ValueError(f"{label}:{number}: {error}") from error
-        # Materialize a stable initial revision without rewriting imported YOLO files.
-        if materialize:
-            self._write_initial(image_id, ann)
-        return ann
+                        else:
+                            if len(coords) != 4:
+                                raise ValueError("Detection annotation must have four coordinates")
+                            x, y, w, h = coords
+                            ann.instances.append(
+                                Instance(
+                                    class_id=category,
+                                    box=validated_box(
+                                        [
+                                            (x - w / 2) * width,
+                                            (y - h / 2) * height,
+                                            (x + w / 2) * width,
+                                            (y + h / 2) * height,
+                                        ],
+                                        width,
+                                        height,
+                                    ),
+                                    source="yolo",
+                                )
+                            )
+                    except (ValueError, KeyError) as error:
+                        raise ValueError(f"{label}:{number}: {error}") from error
+            # Materialize a stable initial revision without rewriting imported YOLO files.
+            if materialize:
+                return self._write_initial(image_id, ann)
+            return ann
 
-    def _write_initial(self, image_id: str, annotation: Annotation):
-        record = annotation.model_dump()
-        record["label_fingerprints"] = [
-            fingerprint(self.label_path(image_id, seg)) for seg in (False, True)
-        ]
-        atomic_write(self.annotation_path(image_id), json.dumps(record))
+    def _write_initial(self, image_id: str, annotation: Annotation) -> Annotation:
+        with self.lock:
+            path = self.annotation_path(image_id)
+            # A delayed initializer must never replace a record another writer committed.
+            if path.exists():
+                return Annotation.model_validate_json(path.read_text())
+            self.ensure_writable()
+            record = annotation.model_dump()
+            record["label_fingerprints"] = [
+                fingerprint(self.label_path(image_id, seg)) for seg in (False, True)
+            ]
+            atomic_write(path, json.dumps(record))
+            return annotation
 
     def save(self, image_id: str, annotation: Annotation, *, new_classes=None) -> Annotation:
         with self.lock:
+            self.ensure_writable()
             old = self.annotation(image_id)
             if annotation.revision != old.revision:
                 raise RevisionConflict("Annotation changed. Reload before saving.")
@@ -248,11 +270,13 @@ class Project:
             if len(ids) != len(set(ids)):
                 raise ValueError("Duplicate instance IDs")
             for instance in annotation.instances:
-                if instance.class_id is None:
-                    continue
-                if instance.class_id not in indices:
+                if instance.class_id is not None and instance.class_id not in indices:
                     raise ValueError("Unknown class")
-                index = indices[instance.class_id]
+                index = indices.get(instance.class_id)
+                if instance.prompt_box:
+                    x1, y1, x2, y2 = instance.prompt_box
+                    if x1 < 0 or y1 < 0 or x2 > width or y2 > height:
+                        raise ValueError("Prompt box outside image")
                 if instance.mask is not None:
                     if instance.mask.get("size") != [height, width] or not isinstance(
                         instance.mask.get("counts"), str
@@ -264,29 +288,32 @@ class Project:
                         raise ValueError("Invalid mask encoding") from error
                     if decoded.shape != (height, width):
                         raise ValueError("Invalid mask dimensions")
+                    instance.polygons = contours(decoded)
                 if instance.box:
+                    instance.box = validated_box(instance.box, width, height)
                     x1, y1, x2, y2 = instance.box
-                    if x1 < 0 or y1 < 0 or x2 > width or y2 > height:
-                        raise ValueError("Box outside image")
-                    detection.append(
-                        format_line(
-                            index,
-                            [
-                                (x1 + x2) / 2 / width,
-                                (y1 + y2) / 2 / height,
-                                (x2 - x1) / width,
-                                (y2 - y1) / height,
-                            ],
+                    if index is not None:
+                        detection.append(
+                            format_line(
+                                index,
+                                [
+                                    (x1 + x2) / 2 / width,
+                                    (y1 + y2) / 2 / height,
+                                    (x2 - x1) / width,
+                                    (y2 - y1) / height,
+                                ],
+                            )
                         )
-                    )
                 for polygon in instance.polygons:
                     if any(x < 0 or y < 0 or x > width or y > height for x, y in polygon):
                         raise ValueError("Polygon outside image")
-                    segmentation.append(
-                        format_line(
-                            index, [value for x, y in polygon for value in (x / width, y / height)]
+                    if index is not None:
+                        segmentation.append(
+                            format_line(
+                                index,
+                                [value for x, y in polygon for value in (x / width, y / height)],
+                            )
                         )
-                    )
             updated = annotation.model_copy(deep=True)
             updated.revision += 1
             labels = ["".join(detection), "".join(segmentation)]
@@ -318,8 +345,7 @@ class Project:
             )
 
     def image_size(self, image_id: str) -> tuple[int, int]:
-        with Image.open(self.image_path(image_id)) as image:
-            return image.size
+        return raster_size(self.image_path(image_id))
 
     def add_category(self, name: str, color: str | None = None, tag: bool = False) -> dict:
         with self.lock:
@@ -333,7 +359,11 @@ class Project:
             if not tag:
                 item["index"] = max((c["index"] for c in categories), default=-1) + 1
             categories.append(item)
-            self.write_metadata()
+            try:
+                self.write_metadata()
+            except Exception:
+                categories.remove(item)
+                raise
             return item
 
 
@@ -343,3 +373,17 @@ def format_line(index: int, values: list[float]) -> str:
 
 def default_color(index: int) -> str:
     return ["#26835d", "#a16927", "#456cd6", "#9b4b88", "#287e96", "#817722"][index % 6]
+
+
+def validated_box(box: list[float], width: int, height: int) -> list[float]:
+    """Reject actual overflow; tolerate only existing YOLO rounding at image edges."""
+    if len(box) != 4 or not all(math.isfinite(value) for value in box):
+        raise ValueError("Invalid box coordinates")
+    x1, y1, x2, y2 = box
+    tolerance = max(width, height) * 1e-6
+    if x1 < -tolerance or y1 < -tolerance or x2 > width + tolerance or y2 > height + tolerance:
+        raise ValueError("Box outside image")
+    clipped = [max(0, x1), max(0, y1), min(width, x2), min(height, y2)]
+    if clipped[2] <= clipped[0] or clipped[3] <= clipped[1]:
+        raise ValueError("Box outside image")
+    return clipped

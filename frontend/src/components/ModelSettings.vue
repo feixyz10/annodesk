@@ -84,7 +84,11 @@ async function inspect(load = false) {
     check.value = result;
     await store.refreshModels();
   } catch (e) {
-    if (token === generation) error.value = String(e);
+    if (token === generation) {
+      error.value = String(e);
+      if (load && props.show && store.meta?.id === project)
+        await store.refreshModels();
+    }
   } finally {
     if (token === generation) busy.value = "";
   }

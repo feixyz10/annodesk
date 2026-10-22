@@ -32,6 +32,7 @@ import { useProject } from "./stores/project";
 import AnnotationCanvas from "./components/AnnotationCanvas.vue";
 import ImageList from "./components/ImageList.vue";
 import ClassPalette from "./components/ClassPalette.vue";
+import CategoryEditor from "./components/CategoryEditor.vue";
 import CandidateBar from "./components/CandidateBar.vue";
 import FilmStrip from "./components/FilmStrip.vue";
 import Icon from "./components/Icon.vue";
@@ -48,6 +49,7 @@ const BatchSetup = defineAsyncComponent(
 import TaskWindow from "./components/TaskWindow.vue";
 import { type Job, isPreparing } from "./tasks";
 import { reviewStates } from "./review";
+import { readPreference, writePreference } from "./preferences";
 const store = useProject(),
   canvas = ref<InstanceType<typeof AnnotationCanvas>>(),
   openDialog = ref(false),
@@ -57,9 +59,9 @@ const store = useProject(),
   help = ref(false),
   promptText = ref(""),
   keySearch = ref("");
-const left = ref(Number(localStorage.getItem("lb-left")) || 260),
-  right = ref(Number(localStorage.getItem("lb-right")) || 290),
-  top = ref(Number(localStorage.getItem("lb-top")) || 53);
+const left = ref(Number(readPreference("lb-left")) || 260),
+  right = ref(Number(readPreference("lb-right")) || 290),
+  top = ref(Number(readPreference("lb-top")) || 53);
 const shortcuts = [
   ["Previous / next image", "A / D or ← / →"],
   ["Select / draw box", "V / R"],
@@ -91,13 +93,6 @@ async function openProject() {
   await store.open(path.value);
   if (store.meta) openDialog.value = false;
 }
-async function update(c: Category) {
-  try {
-    await request("/categories/" + c.id, "PATCH", c);
-  } catch (e) {
-    store.error = String(e);
-  }
-}
 function resize(e: PointerEvent, side: string) {
   const startX = e.clientX,
     startY = e.clientY,
@@ -126,7 +121,7 @@ function resize(e: PointerEvent, side: string) {
   const done = () => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", done);
-    localStorage.setItem(
+    writePreference(
       "lb-" + side,
       String(
         side === "left"
@@ -151,8 +146,18 @@ function review(value: string) {
     ] = value as "ok" | "pending" | "uncertain";
   store.changed();
 }
+function editBoxCoordinate(event: Event, index: number) {
+  const input = event.target as HTMLInputElement;
+  const obj = store.object;
+  if (!obj?.box) return;
+  const box = [...obj.box];
+  box[index] = input.valueAsNumber;
+  store.editBox(obj.id, box);
+  input.value = String(obj.box[index]);
+}
 async function tags(value: string) {
   if (!store.annotation) return;
+  const project = store.meta?.session ?? store.meta?.id;
   store.annotation.tags = [
     ...new Set(
       value
@@ -166,8 +171,10 @@ async function tags(value: string) {
     if (!store.meta?.tags.some((c) => c.name === name)) {
       try {
         const c = await request<Category>("/tags", "POST", { name });
+        if ((store.meta?.session ?? store.meta?.id) !== project) return;
         store.meta?.tags.push(c);
       } catch (e) {
+        if ((store.meta?.session ?? store.meta?.id) !== project) return;
         store.error = String(e);
       }
     }
@@ -307,7 +314,7 @@ const activeJob = computed(() =>
 let jobsGeneration = 0,
   lastClassRefresh = 0;
 watch(
-  () => store.meta?.id,
+  () => [store.meta?.id, store.meta?.session],
   () => {
     jobsGeneration++;
     jobs.value = [];
@@ -836,8 +843,9 @@ onBeforeUnmount(() => {
                     >{{ ["x1", "y1", "x2", "y2"][i]
                     }}<input
                       type="number"
-                      v-model.number="store.object.box[i]"
-                      @change="store.changed('detection')"
+                      :disabled="store.object.locked || store.navigating"
+                      :value="store.object.box[i]"
+                      @change="editBoxCoordinate($event, i)"
                   /></label>
                 </div>
                 <div class="row">
@@ -981,12 +989,13 @@ onBeforeUnmount(() => {
               )
             }}
           </p>
-          <div v-for="c in store.meta?.classes" class="category-editor">
-            <input type="color" v-model="c.color" @change="update(c)" /><input
-              v-model="c.name"
-              @change="update(c)"
-            /><span>ID {{ c.index }}</span>
-          </div>
+          <CategoryEditor
+            v-for="c in store.meta?.classes"
+            :key="c.id"
+            :category="c"
+            @saved="store.applyCategory"
+            @error="store.error = $event"
+          />
           <button @click="createClass">{{ t("Add class") }}</button
           ><button @click="reindex">
             {{ t("Reindex IDs…") }}
@@ -1024,12 +1033,13 @@ onBeforeUnmount(() => {
             <p v-if="!store.meta?.tags.length" class="muted">
               {{ t("No custom tags yet.") }}
             </p>
-            <div v-for="c in store.meta?.tags" class="category-editor">
-              <input type="color" v-model="c.color" @change="update(c)" /><input
-                v-model="c.name"
-                @change="update(c)"
-              />
-            </div>
+            <CategoryEditor
+              v-for="c in store.meta?.tags"
+              :key="c.id"
+              :category="c"
+              @saved="store.applyCategory"
+              @error="store.error = $event"
+            />
             <p class="muted">
               {{
                 t(

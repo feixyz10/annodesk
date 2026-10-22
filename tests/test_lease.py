@@ -24,3 +24,15 @@ def test_http_lifetime_holds_lease(tmp_path):
             ProjectLease(tmp_path)
     with ProjectLease(tmp_path):
         pass
+
+
+@pytest.mark.parametrize("config_state", ["missing", "broken"])
+def test_failed_model_configuration_releases_startup_lease(tmp_path, config_state):
+    # Keep the traceback alive: lease release must not depend on garbage collection.
+    config = tmp_path / "models.json"
+    if config_state == "broken":
+        config.write_text("broken json")
+    with pytest.raises(ValueError) as error:
+        create_app(project=tmp_path, models_config=config)
+    with ProjectLease(tmp_path):
+        assert error.value

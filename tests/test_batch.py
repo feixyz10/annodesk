@@ -234,3 +234,36 @@ def test_dispatch_rechecks_review_and_rejects_replaced_checkpoint(tmp_path):
         assert not any(project.annotation(i).instances[0].mask for i in ids)
     finally:
         pool.close()
+
+
+def test_batch_freezes_configured_directory_for_symlinked_weights(tmp_path):
+    registry = dataset(tmp_path)
+    target = tmp_path / "all-weights"
+    target.mkdir()
+    (target / "sam2.1_s.pt").write_bytes(b"checkpoint")
+    (target / "sam2.1_l.pt").write_bytes(b"other")
+    (tmp_path / "model/sam2.1_s.pt").unlink()
+    (tmp_path / "model/sam2.1_s.pt").symlink_to(target / "sam2.1_s.pt")
+    report = segment_dataset(
+        tmp_path, "", registry, executor_factory=executor, available={"cuda": 0, "mps": False}
+    )
+    assert report["status"] == "complete"
+    assert report["frozen_config"]["models"][0]["source"] == str(tmp_path / "model")
+
+
+def test_spawn_configuration_keeps_symlink_directory(tmp_path):
+    from annodesk.devices import DevicePlan
+    from annodesk.events import EventLog
+    from annodesk.execution import ImageExecutor
+
+    registry = dataset(tmp_path)
+    target = tmp_path / "other"
+    target.mkdir()
+    (target / "sam2.1_s.pt").touch()
+    (tmp_path / "model/sam2.1_s.pt").unlink()
+    (tmp_path / "model/sam2.1_s.pt").symlink_to(target / "sam2.1_s.pt")
+    pool = ImageExecutor(registry, "test", DevicePlan("cpu", ["cpu"], ["cpu"]), EventLog())
+    try:
+        assert pool.config["models"][0]["source"] == str(tmp_path / "model")
+    finally:
+        pool.close()

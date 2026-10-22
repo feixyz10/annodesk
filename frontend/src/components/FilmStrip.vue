@@ -6,8 +6,44 @@ import ThumbImage from "./ThumbImage.vue";
 const store = useProject(),
   el = ref<HTMLDivElement>(),
   left = ref(0);
-const start = computed(() => Math.max(0, Math.floor(left.value / 120) - 3)),
-  visible = computed(() => store.filtered.slice(start.value, start.value + 18));
+const stride = 120,
+  windowSize = 18,
+  start = computed(() =>
+    Math.min(
+      Math.max(0, store.filtered.length - windowSize),
+      Math.max(0, Math.floor(left.value / stride) - 3),
+    ),
+  ),
+  visible = computed(() =>
+    store.filtered.slice(start.value, start.value + windowSize),
+  );
+let generation = 0;
+function setLeft(value: number) {
+  left.value = value;
+  if (el.value) el.value.scrollLeft = value;
+}
+watch(
+  [
+    () => store.search,
+    () => store.meta?.session,
+    () => store.meta?.id,
+    () => store.meta?.root,
+  ],
+  () => {
+    generation++;
+    setLeft(0);
+  },
+);
+watch(
+  () => store.filtered.length,
+  (count) => {
+    const maximum = Math.max(
+      0,
+      count * stride - (el.value?.clientWidth ?? stride),
+    );
+    if (left.value > maximum) setLeft(maximum);
+  },
+);
 function wheel(e: WheelEvent) {
   if (el.value && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
     e.preventDefault();
@@ -17,12 +53,19 @@ function wheel(e: WheelEvent) {
 watch(
   () => store.current?.id,
   async () => {
+    const request = ++generation;
     await nextTick();
+    if (request !== generation) return;
     const index = store.filtered.findIndex((i) => i.id === store.current?.id);
     if (el.value)
-      el.value.scrollLeft = Math.max(
-        0,
-        index * 120 - el.value.clientWidth / 2 + 55,
+      setLeft(
+        Math.max(
+          0,
+          Math.min(
+            Math.max(0, store.filtered.length * stride - el.value.clientWidth),
+            index * stride - el.value.clientWidth / 2 + 55,
+          ),
+        ),
       );
   },
 );
@@ -41,10 +84,10 @@ watch(
       @scroll="left = el?.scrollLeft ?? 0"
       @wheel="wheel"
     >
-      <span :style="{ width: start * 120 + 'px', flexShrink: 0 }"></span
+      <span :style="{ width: start * stride + 'px', flexShrink: 0 }"></span
       ><button
         v-for="image in visible"
-        :key="(store.meta?.id ?? '') + image.id"
+        :key="(store.meta?.session ?? store.meta?.id ?? '') + image.id"
         class="thumb"
         :class="{ active: image.id === store.current?.id }"
         :title="image.path"
@@ -56,7 +99,8 @@ watch(
       ><span
         :style="{
           width:
-            Math.max(0, store.filtered.length - start - visible.length) * 120 +
+            Math.max(0, store.filtered.length - start - visible.length) *
+              stride +
             'px',
           flexShrink: 0,
         }"

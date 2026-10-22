@@ -124,7 +124,7 @@ class ImageExecutor:
         # Freeze all paths before spawning: a config reload cannot change an active job.
         for entry in self.config["models"]:
             if entry["id"] == model:
-                entry["source"] = str(self.weights.parent)
+                entry["source"] = str(registry.resolve(model))
         self.closed = False
         self.expected_names = None
 
@@ -209,7 +209,7 @@ class ImageExecutor:
                                 retries.append(old_task)
                                 self.events.emit(
                                     "WARNING",
-                                    f"Worker {worker_id} exited; retrying {project.entries[image_id]['path']} once",
+                                    f"Worker {worker_id} exited; retrying {old_task[1]} once",
                                     event_type="worker_crash",
                                     project_id=project.metadata["id"],
                                 )
@@ -238,6 +238,10 @@ class ImageExecutor:
                             continue
                         try:
                             with project.lock:
+                                if image_id not in project.entries:
+                                    raise RevisionConflict(
+                                        "Image removed from project during processing"
+                                    )
                                 ann = project.annotation(image_id)
                                 from annodesk.operations import eligible
 
@@ -287,6 +291,10 @@ class ImageExecutor:
                 if annotation is not None:
                     try:
                         with project.lock:
+                            if image_id not in project.entries:
+                                raise RevisionConflict(
+                                    "Image removed from project during processing"
+                                )
                             if file_stamp(self.weights) != self.stamp:
                                 raise RevisionConflict("Model checkpoint changed during processing")
                             if file_stamp(project.image_path(image_id)) != task[5]:

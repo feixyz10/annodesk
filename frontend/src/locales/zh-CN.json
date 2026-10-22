@@ -365,5 +365,10 @@
   "Choose a supported SAM model and an unlocked object with points or a box": "请选择支持候选的 SAM 模型，以及带有点或框提示的未锁定实例",
   "Point/box mask candidates are available interactively. Batch processing always uses a single mask.": "点/框提示支持交互式候选掩膜；批处理始终使用单掩码。",
   "Choose a supported SAM model and a visible, unlocked object with points or a box": "请选择支持候选的 SAM 模型，以及带有点或框提示、可见且未锁定的实例",
-  "Unhide this object before generating candidates": "请先取消隐藏此实例，再生成候选"
+  "Unhide this object before generating candidates": "请先取消隐藏此实例，再生成候选",
+  "Project changed in another browser; reopen the intended project": "项目已在另一页面切换，请重新打开目标项目",
+  "Class name": "类别名称",
+  "Class color": "类别颜色",
+  "Tag name": "标签名称",
+  "Tag color": "标签颜色"
 }

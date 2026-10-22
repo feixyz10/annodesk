@@ -212,7 +212,11 @@ def _run_operation(project, body, models_config, log_dir, log_level):
     events = _logging(log_dir, log_level)
     try:
         report = segment_dataset(
-            project, body.model, ModelRegistry(models_config), events=events, request=body
+            project,
+            body.model,
+            None if body.operation == "boxes_from_masks" else ModelRegistry(models_config),
+            events=events,
+            request=body,
         )
     except KeyboardInterrupt as error:
         raise SystemExit(130) from error

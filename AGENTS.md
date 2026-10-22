@@ -43,7 +43,8 @@ and smoke-test the wheel outside the checkout, including CLI help, bundled docs,
 API and static resources. Do not claim CUDA/MPS compatibility based solely on synthetic tests.
 
 Keep package versions in `pyproject.toml`, `src/annodesk/__init__.py`, frontend package/lock and
-`uv.lock` aligned. Publishing requires an explicit user request; committing a version bump does
+`uv.lock` aligned. Release versions belong in annotated Git tags and package metadata, not commit messages.
+Publishing requires an explicit user request; committing a version bump does
 not authorize publication. Never amend a published release to add new features.
 
 Git tracks source, tests, lockfiles and official docs. Keep plans under ignored `docs/plans/`;

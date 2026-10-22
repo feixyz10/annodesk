@@ -1,9 +1,9 @@
-import { apiBase } from "./api";
+import { apiBase, projectResource } from "./api";
 const cache = new Map<string, { url: string; size: number }>();
 let active = 0,
   bytes = 0;
 const queue: Array<{
-  id: string;
+  url: string;
   key: string;
   signal: AbortSignal;
   resolve: (url: string) => void;
@@ -17,7 +17,7 @@ function drain() {
       continue;
     }
     active++;
-    void fetch(apiBase + `/images/${job.id}/thumbnail`, { signal: job.signal })
+    void fetch(job.url, { signal: job.signal })
       .then((r) => {
         if (!r.ok) throw new Error("Thumbnail unavailable");
         return r.blob();
@@ -67,7 +67,13 @@ export function thumbnail(
     return Promise.resolve(hit.url);
   }
   return new Promise((resolve, reject) => {
-    queue.push({ id, key, signal, resolve, reject });
+    queue.push({
+      url: projectResource(`/images/${id}/thumbnail`),
+      key,
+      signal,
+      resolve,
+      reject,
+    });
     drain();
   });
 }

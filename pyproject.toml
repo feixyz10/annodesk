@@ -1,6 +1,6 @@
 [project]
 name = "annodesk"
-version = "0.5.0"
+version = "0.2.0"
 description = "A local-first image annotation workbench for boxes and masks"
 readme = "docs/user-guide.md"
 requires-python = ">=3.11"
@@ -39,7 +39,7 @@ packages = ["src/annodesk"]
 "docs/user-guide.md" = "annodesk/docs/user-guide.md"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/", "frontend/", "tests/", "docs/specs/", "docs/user-guide.md", "pyproject.toml", "README.md", "AGENTS.md", "uv.lock", "models.json"]
+include = ["src/", "frontend/", "tests/", "docs/specs/", "docs/validation/", "docs/user-guide.md", "pyproject.toml", "README.md", "AGENTS.md", "uv.lock", "models.json"]
 exclude = ["frontend/node_modules"]
 
 [tool.ruff]

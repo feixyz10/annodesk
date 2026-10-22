@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { computed, ref, watch, onScopeDispose } from "vue";
 import {
   request,
+  setProjectSession,
   type Annotation,
   type Category,
   type ImageItem,
@@ -32,6 +33,10 @@ export const useProject = defineStore("project", () => {
     detectionModel = ref(""),
     model = ref("");
   const models = ref<ModelsConfig | null>(null);
+  watch(() => meta.value?.session, setProjectSession, {
+    immediate: true,
+    flush: "sync",
+  });
   async function refreshModels() {
     try {
       models.value = await request<ModelsConfig>("/models");
@@ -87,22 +92,40 @@ export const useProject = defineStore("project", () => {
     };
   }
   async function refreshMeta() {
-    const projectId = meta.value?.id;
+    const projectId = meta.value?.id,
+      session = meta.value?.session,
+      generation = viewGeneration;
     const updated = await request<ProjectMeta>("/project");
-    if (updated?.id === projectId) {
+    if (
+      updated?.id === projectId &&
+      meta.value?.id === projectId &&
+      updated.session === session &&
+      meta.value?.session === session &&
+      generation === viewGeneration
+    ) {
       meta.value = updated;
       syncModels();
     }
   }
   async function applyModel(settings: ModelParameters) {
+    const projectId = meta.value?.id,
+      session = meta.value?.session,
+      generation = viewGeneration;
     await save();
-    const projectId = meta.value?.id;
+    if (generation !== viewGeneration || meta.value?.session !== session)
+      return;
     const updated = await request<ProjectMeta>(
       "/model-settings",
       "POST",
       settings,
     );
-    if (updated.id !== projectId || meta.value?.id !== projectId) return;
+    if (
+      updated.id !== projectId ||
+      meta.value?.id !== projectId ||
+      updated.session !== session ||
+      meta.value?.session !== session
+    )
+      return;
     meta.value = updated;
     syncModels();
   }
@@ -110,6 +133,7 @@ export const useProject = defineStore("project", () => {
     future = ref<string[]>([]);
   let version = 0,
     savedVersion = 0,
+    viewGeneration = 0,
     timer: ReturnType<typeof setTimeout> | undefined,
     flight: Promise<void> | null = null;
   const filtered = computed(() =>
@@ -266,7 +290,8 @@ export const useProject = defineStore("project", () => {
     )
       return;
     const imageId = current.value.id,
-      projectId = meta.value?.id;
+      projectId = meta.value?.id,
+      generation = viewGeneration;
     session.phase = "applying";
     try {
       await save();
@@ -286,10 +311,20 @@ export const useProject = defineStore("project", () => {
           mask: chosen.mask,
         },
       );
-      if (current.value?.id !== imageId || meta.value?.id !== projectId) return;
+      if (
+        generation !== viewGeneration ||
+        candidates.value !== session ||
+        current.value?.id !== imageId ||
+        meta.value?.id !== projectId
+      )
+        return;
       if (version !== captured) {
         error.value =
           "Processing finished after newer edits. Your edits were kept; reload to reconcile.";
+        return;
+      }
+      if (updated.revision < annotation.value!.revision) {
+        cancelCandidates();
         return;
       }
       checkpoint();
@@ -309,6 +344,7 @@ export const useProject = defineStore("project", () => {
       JSON.stringify([
         current.value?.id,
         meta.value?.id,
+        meta.value?.session,
         selected.value,
         task.value,
         JSON.stringify(parameters("segmentation")),
@@ -417,6 +453,7 @@ export const useProject = defineStore("project", () => {
   }
   async function load(image: ImageItem) {
     if (navigating.value) return;
+    viewGeneration++;
     cancelCandidates(true);
     navigating.value = true;
     try {
@@ -454,7 +491,22 @@ export const useProject = defineStore("project", () => {
     }
   }
   async function refresh() {
-    meta.value = await request<ProjectMeta | null>("/project");
+    const generation = viewGeneration,
+      session = meta.value?.session;
+    const updated = await request<ProjectMeta | null>("/project");
+    if (generation !== viewGeneration || meta.value?.session !== session)
+      return;
+    if (
+      updated &&
+      meta.value &&
+      (updated.session !== meta.value.session ||
+        updated.id !== meta.value.id ||
+        updated.root !== meta.value.root)
+    )
+      throw new Error(
+        "Project changed in another browser; reopen the intended project",
+      );
+    meta.value = updated;
     if (!meta.value) {
       images.value = [];
       current.value = null;
@@ -466,6 +518,11 @@ export const useProject = defineStore("project", () => {
       const page = await request<{ items: ImageItem[]; total: number }>(
         `/images?offset=${offset}&limit=1000`,
       );
+      if (
+        generation !== viewGeneration ||
+        meta.value?.session !== updated?.session
+      )
+        return;
       all.push(...page.items);
       if (all.length >= page.total) break;
     }
@@ -475,22 +532,33 @@ export const useProject = defineStore("project", () => {
       defaultClass.value = meta.value.classes[0]?.id ?? null;
   }
   async function open(path: string) {
+    if (navigating.value) return;
+    navigating.value = true;
+    viewGeneration++;
     cancelCandidates(true);
     try {
       await save();
       await request("/project/open", "POST", { path });
       current.value = null;
       annotation.value = null;
+      meta.value = null;
       defaultClass.value = null;
       await refresh();
+      navigating.value = false;
       if (images.value[0]) await load(images.value[0]);
     } catch (e) {
       error.value = String(e);
+    } finally {
+      navigating.value = false;
     }
   }
   async function addClass(name: string) {
+    const projectId = meta.value?.id,
+      session = meta.value?.session;
     try {
       const c = await request<Category>("/classes", "POST", { name });
+      if (meta.value?.id !== projectId || meta.value?.session !== session)
+        return;
       meta.value?.classes.push(c);
       defaultClass.value = c.id;
       return c;
@@ -522,6 +590,26 @@ export const useProject = defineStore("project", () => {
     );
     selected.value = null;
     changed(true);
+  }
+  function editBox(id: string, box: number[], prompt = false, record = true) {
+    const ann = annotation.value;
+    const obj = ann?.instances.find((o) => o.id === id);
+    if (!ann || !obj || obj.locked || navigating.value) return;
+    if (box.length !== 4 || !box.every(Number.isFinite)) return;
+    const clipped = box.map((v, i) =>
+      Math.max(0, Math.min(i % 2 ? ann.height : ann.width, v)),
+    );
+    if (clipped[2] <= clipped[0] || clipped[3] <= clipped[1]) return;
+    const previous = prompt ? obj.prompt_box : obj.box;
+    if (JSON.stringify(previous) === JSON.stringify(clipped)) return;
+    if (record) checkpoint();
+    if (prompt) obj.prompt_box = clipped;
+    else {
+      obj.box = clipped;
+      if (obj.mask || obj.polygons.length)
+        ann.segmentation_review = "uncertain";
+    }
+    changed(prompt ? "segmentation" : "detection");
   }
   function undo(redo = false) {
     if (navigating.value || !annotation.value) return;
@@ -574,8 +662,11 @@ export const useProject = defineStore("project", () => {
   async function segment(onlyMissing = false, text = "") {
     cancelCandidates();
     if (!annotation.value || !current.value) return;
+    const generation = viewGeneration;
     try {
       await save();
+      if (generation !== viewGeneration || !current.value || !annotation.value)
+        return;
       const imageId = current.value!.id,
         projectId = meta.value?.id,
         editVersion = version;
@@ -589,16 +680,23 @@ export const useProject = defineStore("project", () => {
           class_id: defaultClass.value,
         },
       );
-      if (current.value?.id !== imageId || meta.value?.id !== projectId) return;
+      if (
+        generation !== viewGeneration ||
+        current.value?.id !== imageId ||
+        meta.value?.id !== projectId
+      )
+        return;
       if (version !== editVersion) {
         error.value =
           "Inference finished after newer edits. Your edits were kept; reload to reconcile.";
         return;
       }
+      if (updated.revision < annotation.value!.revision) return;
+      checkpoint();
       annotation.value = { ...annotation.value!, ...updated };
       error.value = "";
     } catch (e) {
-      error.value = String(e);
+      if (generation === viewGeneration) error.value = String(e);
     }
   }
   async function assist(
@@ -608,8 +706,11 @@ export const useProject = defineStore("project", () => {
   ) {
     if (!annotation.value || !current.value) return;
     cancelCandidates();
+    const generation = viewGeneration;
     try {
       await save();
+      if (generation !== viewGeneration || !current.value || !annotation.value)
+        return;
       const imageId = current.value!.id,
         projectId = meta.value?.id,
         captured = version;
@@ -623,18 +724,24 @@ export const useProject = defineStore("project", () => {
           recalculate_boxes: recalculate,
         },
       );
-      if (current.value?.id !== imageId || meta.value?.id !== projectId) return;
+      if (
+        generation !== viewGeneration ||
+        current.value?.id !== imageId ||
+        meta.value?.id !== projectId
+      )
+        return;
       if (version !== captured) {
         error.value =
           "Processing finished after newer edits. Your edits were kept; reload to reconcile.";
         return;
       }
+      if (updated.revision < annotation.value!.revision) return;
       checkpoint();
       annotation.value = { ...annotation.value!, ...updated };
       if (operation === "detection") await refreshMeta();
       error.value = "";
     } catch (e) {
-      error.value = String(e);
+      if (generation === viewGeneration) error.value = String(e);
     }
   }
   function selectedValue() {
@@ -650,15 +757,25 @@ export const useProject = defineStore("project", () => {
     if (!current.value || dirty.value || navigating.value) return;
     const imageId = current.value.id,
       projectId = meta.value?.id,
-      captured = version;
+      captured = version,
+      generation = viewGeneration;
     const updated = await request<Annotation>(`/images/${imageId}/annotation`);
     if (
       current.value?.id === imageId &&
+      generation === viewGeneration &&
       meta.value?.id === projectId &&
       version === captured &&
+      updated.revision >= annotation.value!.revision &&
       !dirty.value
     )
       annotation.value = updated;
+  }
+  function applyCategory(category: Category) {
+    const current = [
+      ...(meta.value?.classes ?? []),
+      ...(meta.value?.tags ?? []),
+    ].find((entry) => entry.id === category.id);
+    if (current) Object.assign(current, category);
   }
   return {
     candidates,
@@ -706,8 +823,10 @@ export const useProject = defineStore("project", () => {
     refresh,
     open,
     addClass,
+    applyCategory,
     assign,
     remove,
+    editBox,
     undo,
     move,
     segment,

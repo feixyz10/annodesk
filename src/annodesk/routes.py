@@ -3,20 +3,22 @@
 import hashlib
 import io
 import json
+import threading
 from pathlib import Path
 from typing import Literal
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
 from annodesk.candidates import CandidateApply, CandidateRequest, apply_candidate
 from annodesk.classes import compatible
 from annodesk.detector import inspect_classes
-from annodesk.domain import Annotation
+from annodesk.domain import Annotation, uid
 from annodesk.events import EventLog
+from annodesk.images import load_rgb
 from annodesk.inference import SegmentationService, SegmentRequest, UltralyticsAdapter
 from annodesk.jobs import BatchJobs
 from annodesk.lease import ProjectLease
@@ -50,37 +52,76 @@ class CategoryInput(BaseModel):
 def project_routes(
     initial: Path | None = None, models_config: Path | None = None, events: EventLog | None = None
 ) -> APIRouter:
-    router = APIRouter(prefix="/api/v1")
     events = events or EventLog()
     lease = ProjectLease(initial) if initial else None
     try:
         current = Project(initial) if initial else None
+        registry = ModelRegistry(models_config)
     except BaseException:
         if lease:
             lease.close()
         raise
-    registry = ModelRegistry(models_config)
 
     services = {}
     batches = {}
+    session = uid()
+    admission = threading.RLock()
+    active_requests = 0
+    opening = False
+
+    async def project_request(request: Request):
+        nonlocal active_requests, opening
+        path = request.url.path.removeprefix("/api/v1")
+        if path in ("/project", "/models"):
+            yield
+            return
+        is_open = path == "/project/open"
+        with admission:
+            if opening or (is_open and active_requests):
+                raise HTTPException(
+                    409, "Wait for active project requests before changing projects"
+                )
+            expected = request.headers.get("X-AnnoDesk-Project") or request.query_params.get(
+                "project_session"
+            )
+            if not is_open and expected and expected != session:
+                raise HTTPException(
+                    409, "Project changed in another browser; reopen the intended project"
+                )
+            if is_open:
+                opening = True
+            else:
+                active_requests += 1
+        try:
+            yield
+        finally:
+            with admission:
+                if is_open:
+                    opening = False
+                else:
+                    active_requests -= 1
+
+    router = APIRouter(prefix="/api/v1", dependencies=[Depends(project_request)])
 
     def service():
-        item = project()
-        existing = services.get(item.metadata["id"])
-        if existing is None or existing.project is not item:
-            if existing is not None:
-                existing.close()
-            batches.pop(item.metadata["id"], None)
-            services[item.metadata["id"]] = SegmentationService(
-                item, adapter=UltralyticsAdapter(registry, events=events)
-            )
-        return services[item.metadata["id"]]
+        with admission:
+            item = project()
+            existing = services.get(item.metadata["id"])
+            if existing is None or existing.project is not item:
+                if existing is not None:
+                    existing.close()
+                batches.pop(item.metadata["id"], None)
+                services[item.metadata["id"]] = SegmentationService(
+                    item, adapter=UltralyticsAdapter(registry, events=events)
+                )
+            return services[item.metadata["id"]]
 
     def batch():
-        item = service()
-        if item.project.metadata["id"] not in batches:
-            batches[item.project.metadata["id"]] = BatchJobs(item, events)
-        return batches[item.project.metadata["id"]]
+        with admission:
+            item = service()
+            if item.project.metadata["id"] not in batches:
+                batches[item.project.metadata["id"]] = BatchJobs(item, events)
+            return batches[item.project.metadata["id"]]
 
     def project() -> Project:
         if current is None:
@@ -89,7 +130,7 @@ def project_routes(
 
     @router.post("/project/open")
     def open_project(body: OpenProject):
-        nonlocal current, lease
+        nonlocal current, lease, session
         if any(s.active for s in services.values()) or any(
             any(j["status"] == "running" for j in b.records.values()) for b in batches.values()
         ):
@@ -108,17 +149,19 @@ def project_routes(
             old.close()
         services.clear()
         batches.clear()
-        if lease:
-            lease.close()
-        lease = replacement_lease
-        current = replacement
+        with admission:
+            if lease:
+                lease.close()
+            lease = replacement_lease
+            current = replacement
+            session = uid()
         events.emit(
             "INFO",
             f"Project opened: {current.root}",
             event_type="project_open",
             project_id=current.metadata["id"],
         )
-        return {**current.metadata, "root": str(current.root), "image_count": len(current.entries)}
+        return get_project()
 
     @router.get("/models")
     def list_models():
@@ -178,10 +221,16 @@ def project_routes(
 
     @router.get("/project")
     def get_project():
-        if current is None:
-            return None
-        item = project()
-        return {**item.metadata, "root": str(item.root), "image_count": len(item.entries)}
+        with admission:
+            if current is None:
+                return None
+            item = project()
+            return {
+                **item.metadata,
+                "session": session,
+                "root": str(item.root),
+                "image_count": len(item.entries),
+            }
 
     @router.get("/project/statistics")
     def statistics(task: Literal["detection", "segmentation"] = "segmentation"):
@@ -198,7 +247,14 @@ def project_routes(
 
     @router.get("/images/{image_id}/file")
     def image_file(image_id: str):
-        return FileResponse(project().image_path(image_id))
+        # Browsers disagree on file EXIF and cannot reliably decode TIFF.
+        # Send the same metadata-free raster used by model adapters.
+        image = load_rgb(project().image_path(image_id))
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        return Response(
+            output.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"}
+        )
 
     @router.get("/images/{image_id}/thumbnail")
     def thumbnail(image_id: str, size: int = Query(240, ge=48, le=320)):
@@ -206,17 +262,17 @@ def project_routes(
         path = item.image_path(image_id)
         stat = path.stat()
         key = hashlib.sha256(
-            f"{path}:{stat.st_mtime_ns}:{stat.st_size}:{size}:v1".encode()
+            f"{path}:{stat.st_mtime_ns}:{stat.st_size}:{size}:v2".encode()
         ).hexdigest()
         cache = item.private / "thumbnails"
         cache.mkdir(exist_ok=True)
         target = cache / f"{key}.jpg"
         with item.lock:
             if not target.exists():
-                with Image.open(path) as image:
-                    image.thumbnail((size, size))
-                    output = io.BytesIO()
-                    image.convert("RGB").save(output, format="JPEG", quality=80)
+                image = load_rgb(path)
+                image.thumbnail((size, size))
+                output = io.BytesIO()
+                image.save(output, format="JPEG", quality=80)
                 target.write_bytes(output.getvalue())
                 files = sorted(cache.glob("*.jpg"), key=lambda file: file.stat().st_mtime)
                 budget = sum(file.stat().st_size for file in files)
@@ -279,12 +335,25 @@ def project_routes(
                 and running_detection
             ):
                 raise ValueError("Wait for detection to finish before renaming project classes")
-            category["name"] = body.name.strip()
-            if not category["name"]:
+            name = body.name.strip()
+            if not name:
                 raise ValueError("Name must not be empty")
+            palette = (
+                item.metadata["classes"]
+                if category in item.metadata["classes"]
+                else item.metadata["tags"]
+            )
+            if any(c["id"] != category_id and c["name"] == name for c in palette):
+                raise ValueError("Name already exists")
+            previous = json.loads(json.dumps(item.metadata))
+            category["name"] = name
             if body.color:
                 category["color"] = body.color
-            item.write_metadata()
+            try:
+                item.write_metadata()
+            except Exception:
+                item.metadata = previous
+                raise
             return category
 
     @router.post("/classes/reindex")
@@ -309,14 +378,28 @@ def project_routes(
     def export_job(body: ExportInput):
         return batch().export(body.task, body.format, body.include_pending)
 
+    def require_idle_batch(manager):
+        # Caller holds the same lock used by start/resume/export, closing the
+        # check-versus-start race. Cancellation remains active until workers stop.
+        if any(job["status"] == "running" for job in manager.records.values()):
+            raise HTTPException(
+                409, "Wait for the active batch or export to finish before changing trash"
+            )
+
     @router.post("/trash/excluded")
     def trash():
-        return {"operation": trash_excluded(project())}
+        manager = batch()
+        with manager.lock:
+            require_idle_batch(manager)
+            return {"operation": trash_excluded(project())}
 
     @router.post("/trash/{operation}/restore")
     def restore(operation: str):
-        restore_trash(project(), operation)
-        return {"restored": True}
+        manager = batch()
+        with manager.lock:
+            require_idle_batch(manager)
+            restore_trash(project(), operation)
+            return {"restored": True}
 
     @router.post("/images/{image_id}/mask-candidates")
     def mask_candidates(image_id: str, body: CandidateRequest):
@@ -331,22 +414,18 @@ def project_routes(
     @router.post("/images/{image_id}/segment")
     def segment(image_id: str, body: SegmentRequest):
         item = service()
-        return item.executor.submit(
-            item.process, image_id, body.model_copy(update={"operation": "segmentation"})
-        ).result()
+        return item.submit(image_id, body.model_copy(update={"operation": "segmentation"})).result()
 
     @router.post("/images/{image_id}/detect")
     def detect(image_id: str, body: SegmentRequest):
         item = service()
-        return item.executor.submit(
-            item.process, image_id, body.model_copy(update={"operation": "detection"})
-        ).result()
+        return item.submit(image_id, body.model_copy(update={"operation": "detection"})).result()
 
     @router.post("/images/{image_id}/boxes-from-masks")
     def boxes_from_masks(image_id: str, body: SegmentRequest):
         item = service()
-        return item.executor.submit(
-            item.process, image_id, body.model_copy(update={"operation": "boxes_from_masks"})
+        return item.submit(
+            image_id, body.model_copy(update={"operation": "boxes_from_masks"})
         ).result()
 
     @router.get("/jobs")
@@ -377,14 +456,17 @@ def project_routes(
     @router.get("/images/{image_id}/masks/{instance_id}")
     def mask_image(image_id: str, instance_id: str):
         item = project()
-        annotation = item.annotation(image_id)
-        obj = next((o for o in annotation.instances if o.id == instance_id), None)
-        if obj is None or not obj.mask:
-            raise KeyError("No mask")
+        with item.lock:
+            # Masks only exist in committed internal records. A missing-mask GET
+            # must not initialize a YOLO snapshot or mutate annotations.
+            annotation = item.annotation(image_id, materialize=False)
+            obj = next((o for o in annotation.instances if o.id == instance_id), None)
+            if obj is None or not obj.mask:
+                raise KeyError("No mask")
+            color = next(
+                (c["color"] for c in item.metadata["classes"] if c["id"] == obj.class_id), "#657286"
+            )
         binary = decode_mask(obj.mask)
-        color = next(
-            (c["color"] for c in item.metadata["classes"] if c["id"] == obj.class_id), "#657286"
-        )
         rgba = np.zeros((*binary.shape, 4), dtype=np.uint8)
         rgba[:, :, :3] = [int(color[i : i + 2], 16) for i in (1, 3, 5)]
         rgba[:, :, 3] = binary * 110

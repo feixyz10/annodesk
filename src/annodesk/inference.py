@@ -2,6 +2,7 @@
 
 import importlib.util
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -10,10 +11,11 @@ from pydantic import BaseModel, Field
 
 from annodesk.devices import DeviceType
 from annodesk.domain import Annotation, Instance
+from annodesk.images import inference_image
 from annodesk.masks import contours, encode_mask
 from annodesk.models import ModelRegistry
 from annodesk.offline import offline_inference
-from annodesk.storage import Project
+from annodesk.storage import Project, RevisionConflict, fingerprint
 
 
 class SegmentRequest(BaseModel):
@@ -101,7 +103,11 @@ class UltralyticsAdapter:
         if importlib.util.find_spec("ultralytics") is None:
             raise ValueError("Install inference support with: uv sync --extra inference")
         key = (str(weights), weights.stat().st_mtime_ns, backend, bool(text), self.device)
-        if self.key != key:
+        if self.key != key or self.predictor is None:
+            # Invalidate before construction/imports. Publish a new predictor and
+            # its key together only after setup succeeds; failures remain retryable.
+            self.predictor, self.key, self.image_key = None, None, None
+            self.loaded_id = ""
             import torch
 
             if text:
@@ -121,8 +127,7 @@ class UltralyticsAdapter:
                 import os
 
                 torch.set_num_threads(max(1, int(os.environ.get("OMP_NUM_THREADS", "1"))))
-            self.predictor = None
-            self.predictor = cls(
+            predictor = cls(
                 overrides={
                     "model": str(weights),
                     "task": "segment",
@@ -132,8 +137,26 @@ class UltralyticsAdapter:
                     "device": torch.device(self.device) if self.device else "",
                 }
             )
-            self.predictor.setup_model(verbose=False)
-            self.key, self.image_key = key, None
+            # Meta checkpoints use different names from Ultralytics' filename dispatcher.
+            # Build known official architectures explicitly, keeping the original local path.
+            official = {
+                "sam2_hiera_tiny.pt": "build_sam2_t",
+                "sam2_hiera_small.pt": "build_sam2_s",
+                "sam2_hiera_base_plus.pt": "build_sam2_b",
+                "sam2_hiera_large.pt": "build_sam2_l",
+                "sam2.1_hiera_tiny.pt": "build_sam2_t",
+                "sam2.1_hiera_small.pt": "build_sam2_s",
+                "sam2.1_hiera_base_plus.pt": "build_sam2_b",
+                "sam2.1_hiera_large.pt": "build_sam2_l",
+            }
+            builder = official.get(weights.name) if backend == "sam2" else None
+            if builder:
+                from ultralytics.models.sam import build
+
+                predictor.setup_model(model=getattr(build, builder)(str(weights)), verbose=False)
+            else:
+                predictor.setup_model(verbose=False)
+            self.predictor, self.key, self.image_key = predictor, key, None
             if self.events:
                 self.events.emit(
                     "INFO",
@@ -165,15 +188,17 @@ class UltralyticsAdapter:
         self._load(weights, backend, text)
         image_key = (str(path), path.stat().st_mtime_ns, path.stat().st_size)
         if image_key != self.image_key:
-            self.predictor.set_image(str(path))
+            self.predictor.set_image(inference_image(path))
             self.image_key = image_key
         prompts = (
             {"text": [text]}
             if text
             else {
                 "bboxes": [box] if box else None,
-                "points": [[p.x, p.y] for p in points] or None,
-                "labels": [int(p.positive) for p in points] or None,
+                # All clicks refine one instance. A flat Nx2 array instead
+                # describes N independently prompted objects in Ultralytics.
+                "points": [[[p.x, p.y] for p in points]] if points else None,
+                "labels": [[int(p.positive) for p in points]] if points else None,
             }
         )
         # This is an inference argument, not an Ultralytics config override.
@@ -199,6 +224,14 @@ class UltralyticsAdapter:
             if result.masks is not None
             for mask in result.masks.data
         ]
+
+
+@dataclass(frozen=True)
+class RequestSnapshot:
+    annotation: Annotation
+    size: tuple[int, int]
+    stamp: tuple[int, int]
+    labels: tuple[str, str]
 
 
 class SegmentationService:
@@ -246,7 +279,44 @@ class SegmentationService:
         finally:
             self.active = False
 
-    def process(self, image_id: str, body: SegmentRequest):
+    def snapshot(self, image_id: str) -> RequestSnapshot:
+        from annodesk.execution import file_stamp
+
+        with self.project.lock:
+            self.project.ensure_writable()
+            annotation = self.project.annotation(image_id).model_copy(deep=True)
+            self.project.validate_fingerprints(image_id)
+            return RequestSnapshot(
+                annotation,
+                self.project.image_size(image_id),
+                file_stamp(self.project.image_path(image_id)),
+                tuple(fingerprint(self.project.label_path(image_id, seg)) for seg in (False, True)),
+            )
+
+    def submit(self, image_id: str, body: SegmentRequest):
+        # Capture before entering the serial executor, including mutable request fields.
+        snapshot = self.snapshot(image_id)
+        return self.executor.submit(self.process, image_id, body.model_copy(deep=True), snapshot)
+
+    def validate_snapshot(self, image_id: str, snapshot: RequestSnapshot):
+        from annodesk.execution import file_stamp
+
+        self.project.ensure_writable()
+        if self.project.annotation(image_id).revision != snapshot.annotation.revision:
+            raise RevisionConflict("Annotation changed. Reload before saving.")
+        self.project.validate_fingerprints(image_id)
+        labels = tuple(fingerprint(self.project.label_path(image_id, seg)) for seg in (False, True))
+        if labels != snapshot.labels:
+            raise RevisionConflict(
+                "YOLO labels changed outside AnnoDesk; reopen or reconcile them."
+            )
+        if file_stamp(self.project.image_path(image_id)) != snapshot.stamp:
+            raise ValueError("Image changed during processing")
+
+    def process(self, image_id: str, body: SegmentRequest, snapshot: RequestSnapshot | None = None):
+        snapshot = snapshot or self.snapshot(image_id)
+        with self.project.lock:
+            self.validate_snapshot(image_id, snapshot)
         self.active = True
         try:
             body = self.configure(body)
@@ -254,7 +324,7 @@ class SegmentationService:
                 from annodesk.operations import prepare_detection
 
                 body = prepare_detection(self.project, body, self.adapter.load(body.model))
-            return self._process(image_id, body)
+            return self._process(image_id, body, snapshot)
         finally:
             self.active = False
 
@@ -269,24 +339,19 @@ class SegmentationService:
         finally:
             self.active = False
 
-    def _process(self, image_id: str, body: SegmentRequest):
-        with self.project.lock:
-            annotation = self.project.annotation(image_id)
-            from annodesk.execution import file_stamp
-
-            stamp = file_stamp(self.project.image_path(image_id))
+    def _process(self, image_id: str, body: SegmentRequest, snapshot: RequestSnapshot):
         computed = compute_annotation(
             self.project.image_path(image_id),
-            self.project.image_size(image_id),
-            annotation,
+            snapshot.size,
+            snapshot.annotation.model_copy(deep=True),
             body,
             self.adapter,
         )
         from annodesk.operations import commit_result
 
-        if file_stamp(self.project.image_path(image_id)) != stamp:
-            raise ValueError("Image changed during processing")
-        return commit_result(self.project, image_id, computed, body)
+        with self.project.lock:
+            self.validate_snapshot(image_id, snapshot)
+            return commit_result(self.project, image_id, computed, body)
 
 
 def compute_annotation(
@@ -305,7 +370,10 @@ def compute_annotation(
         else [
             o
             for o in annotation.instances
-            if o.box and not o.mask and not o.polygons and not o.locked
+            if (o.box or o.prompt_box or o.points)
+            and not o.mask
+            and not o.polygons
+            and not o.locked
         ]
     )
     if body.text:
@@ -324,16 +392,28 @@ def compute_annotation(
         )
         if not masks:
             raise ValueError("No mask returned; existing annotations were preserved")
-        for i, mask in enumerate(masks):
+        accepted = 0
+        for mask in masks:
             if mask.shape != size[::-1]:
                 raise ValueError("Model mask size does not match the original image")
-            obj = target.model_copy(deep=True) if i == 0 else Instance(class_id=target.class_id)
+            mask = (mask != 0).astype(np.uint8)
+            if not mask.any():
+                continue
+            obj = (
+                target.model_copy(deep=True)
+                if accepted == 0
+                else Instance(class_id=target.class_id)
+            )
             obj.mask, obj.polygons, obj.source = encode_mask(mask), contours(mask), body.model
+            accepted += 1
             if body.text:
                 annotation.instances.append(obj)
             else:
                 index = next(j for j, o in enumerate(annotation.instances) if o.id == target.id)
                 annotation.instances[index] = obj
                 break
+        if not accepted:
+            raise ValueError("No mask returned; existing annotations were preserved")
     annotation.segmentation_review = "pending"
+    annotation.explicit_empty["segmentation"] = False
     return annotation

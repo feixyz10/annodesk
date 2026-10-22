@@ -20,7 +20,7 @@ let generation = 0,
 async function refresh(reset = false) {
   if (timer) clearTimeout(timer);
   const token = ++generation,
-    project = store.meta?.id,
+    project = store.meta?.session ?? store.meta?.id,
     task = store.task;
   if (reset) stats.value = null;
   if (!project || document.hidden) return;
@@ -30,7 +30,7 @@ async function refresh(reset = false) {
     );
     if (
       generation !== token ||
-      store.meta?.id !== project ||
+      (store.meta?.session ?? store.meta?.id) !== project ||
       store.task !== task
     )
       return;
@@ -47,7 +47,7 @@ async function refresh(reset = false) {
   }
 }
 watch(
-  () => [store.meta?.id, store.task],
+  () => [store.meta?.id, store.meta?.session, store.task],
   () => void refresh(true),
   { immediate: true },
 );

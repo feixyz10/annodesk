@@ -1,8 +1,25 @@
+import { readPreference } from "./preferences";
 export let apiBase = "/api/v1";
+export let projectSession = "";
+export function setProjectSession(session?: string) {
+  projectSession = session || "";
+}
+export function projectResource(
+  path: string,
+  session = projectSession,
+): string {
+  return (
+    apiBase +
+    path +
+    (session
+      ? `${path.includes("?") ? "&" : "?"}project_session=${encodeURIComponent(session)}`
+      : "")
+  );
+}
 export async function configureApi() {
   const response = await fetch("/ui-config.json", { cache: "no-store" });
   if (response.ok) apiBase = (await response.json()).apiBase;
-  apiBase = localStorage.getItem("annodesk-api") || apiBase;
+  apiBase = readPreference("annodesk-api") || apiBase;
 }
 export async function request<T>(
   path: string,
@@ -12,7 +29,10 @@ export async function request<T>(
   const response = await fetch(apiBase + path, {
     cache: "no-store",
     method,
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
+    headers: {
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      ...(projectSession ? { "X-AnnoDesk-Project": projectSession } : {}),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) {
@@ -72,6 +92,7 @@ export interface Annotation {
 }
 export interface ProjectMeta {
   id: string;
+  session?: string;
   root: string;
   classes: Category[];
   tags: Category[];

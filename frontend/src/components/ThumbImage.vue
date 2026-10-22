@@ -10,7 +10,7 @@ onMounted(async () => {
     src.value = await thumbnail(
       props.id,
       controller.signal,
-      useProject().meta?.id ?? "",
+      useProject().meta?.session ?? useProject().meta?.id ?? "",
     );
   } catch {
     /* unloaded or unavailable */
