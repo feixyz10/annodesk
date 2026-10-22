@@ -14,6 +14,40 @@ def test_cli_help_does_not_import_torch():
     assert result.returncode == 0
     assert "serve" in result.stdout
     assert "doctor" in result.stdout
+    assert "build-ui" not in result.stdout
+    assert "Start the workbench with serve" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["serve", "segment", "detect", "boxes-from-masks", "api", "ui", "models", "doctor", "docs"],
+)
+def test_user_command_help_remains_lazy(command):
+    code = """
+import importlib.abc
+import runpy
+import sys
+
+class BlockModels(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'torch', 'ultralytics'}:
+            raise AssertionError('Help imported an inference dependency: ' + fullname)
+
+sys.meta_path.insert(0, BlockModels())
+sys.argv = ['annodesk', sys.argv[1], '--help']
+runpy.run_module('annodesk', run_name='__main__')
+"""
+    result = subprocess.run([sys.executable, "-c", code, command], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "options" in result.stdout
+
+
+def test_developer_build_command_is_not_exposed():
+    result = subprocess.run(
+        [sys.executable, "-m", "annodesk", "build-ui"], capture_output=True, text=True
+    )
+    assert result.returncode == 2
+    assert "build-ui" in result.stderr
 
 
 @pytest.mark.parametrize("config_state", ["missing", "broken"])

@@ -2,15 +2,7 @@
 
 AnnoDesk 用于标注图像中的检测框和实例分割 mask，可导入已有 YOLO 检测标签，再根据框生成分割结果并人工复核。界面支持英文和简体中文，采用浅色主题，在浏览器中使用；图片、模型和标注数据保存在运行后端的电脑上。
 
-本指南对应 0.2.0。
-
-本指南面向安装 wheel 的使用者，不需要源码仓库、Node.js 或前端构建工具。
-
-## 本版更新与升级
-
-0.2.0 增加 YOLO 检测预标注、严格类别兼容校验、mask 转框、多 worker 批处理、模型/任务窗口、Loguru 日志、常驻审核统计、中英文切换和交互式候选掩码。批量和自动分割仍使用单掩码，模型权重必须自行准备。
-
-本版同时修复并发保存与过期推理覆盖、跨图片拖框、类别/标签编辑失败回滚、回收站类别重排、EXIF/TIFF 显示坐标及筛选后缩略图空白等问题。升级前备份整个项目，尤其是 `.annodesk/`；旧标注不会自动变为已审核，历史方向错位标注仍需人工复核。真实验证限于下文列出的模型和设备。
+版本：0.2.1。
 
 ## 1. 安装
 
@@ -35,25 +27,33 @@ Windows PowerShell 激活环境：
 从 PyPI 安装此版本：
 
 ```sh
-python -m pip install "annodesk==0.2.0"
+python -m pip install "annodesk==0.2.1"
 ```
 
-也可离线安装拿到的 wheel；依赖需事先准备，文件名中的版本号以实际发布文件为准：
+使用本地 wheel 安装（离线环境需提前准备依赖）：
 
 ```sh
-python -m pip install ./annodesk-0.2.0-py3-none-any.whl
+python -m pip install ./annodesk-0.2.1-py3-none-any.whl
 ```
 
 基础安装即可使用框标注、类别、审核状态和数据管理。若需要 SAM 或检测模型推理，显式安装可选依赖：
 
 ```sh
-python -m pip install "annodesk[inference]==0.2.0"
+python -m pip install "annodesk[inference]==0.2.1"
 annodesk doctor
 ```
 
 `doctor` 只检查 torch / ultralytics 是否安装，不验证权重、显卡驱动或推理结果。PyTorch 的 GPU 环境需根据实际机器自行准备；SAM 3 文本推理还需要对应的本地 tokenizer / runtime 依赖。
 
 安装依赖可能访问 Python 包索引；模型推理不会自动下载权重，也不会自动安装缺失依赖。
+
+升级时先停止服务并备份整个项目，尤其是 `.annodesk/`，再执行：
+
+```sh
+python -m pip install --upgrade "annodesk==0.2.1"
+```
+
+需要推理功能时使用 `"annodesk[inference]==0.2.1"`。升级后重启服务并刷新页面，已有标注保留原审核状态。
 
 ## 2. 启动和打开数据集
 
@@ -75,9 +75,9 @@ annodesk serve
 annodesk serve --port 8766
 ```
 
-同一后端同时打开多个浏览器页面时，在一个页面切换项目后，旧页面的保存和图片请求会报项目已变化，不会写入新项目。请确认后端目标目录后重新打开；复制的数据集即使保留相同项目ID，也会分开识别。正在保存、推理或处理项目请求时，切换可能被拒绝，待请求结束后重试。打开项目/切图期间工作区暂时不可编辑。
+同一后端同时打开多个浏览器页面时，在一个页面切换项目后，旧页面会提示项目已变化。确认后端目标目录后重新打开即可。正在保存或推理时，切换可能被拒绝，待操作结束后重试。打开项目和切图期间工作区暂时不可编辑。
 
-同一数据集只允许一个 AnnoDesk 写入进程。后端打开项目期间持有跨进程写锁，独立 `segment` / `detect` / `boxes-from-masks` 命令不能同时写同一项目；先关闭项目服务。异常退出后系统会释放锁，不需要删除 lock 文件。不要在多个 Uvicorn worker 中运行同一项目。
+同一数据集只允许一个 AnnoDesk 服务或批处理命令写入。运行独立 `segment` / `detect` / `boxes-from-masks` 命令前，先关闭占用该项目的服务。异常退出后系统会释放锁，不需要删除 lock 文件。
 
 ## 3. 准备数据集
 
@@ -105,9 +105,9 @@ labels_seg/train/camera_a/001.txt
 
 同一目录下的 `001.jpg` 与 `001.png` 会争用同一个标签文件，需先重命名。导入已有 detection 和 segmentation 标签时，目前会分别创建实例，不自动匹配合并。YOLO框不仅各分量需在[0,1]内，转换后也必须有正面积且位于图片内；真实越界会报出标签文件与行号，不生成内部标注。仅容忍浮点舍入引起的极小边缘误差。修正源txt后可重新打开该图片。检测导出同样拒绝旧内部记录中的真实越界框，请先修正框再导出。
 
-图片显示与推理使用服务端Pillow解码的同一份首帧RGB像素。JPEG按存储栅格标注，不额外按EXIF旋转：例如120×80、方向标记为6的图片仍使用120×80坐标；TIFF使用Pillow解码后的栅格尺寸。主画布提供无方向元数据的全分辨率PNG预览，因此TIFF也可在浏览器中显示。多页TIFF/动画只取首帧，显示和推理为RGB/8bit；项目原图保持不变。修复不会自动推断并纠正此前因显示错位产生的标注，受影响图片仍需人工复核。
+图片显示与推理使用同一份首帧 RGB 像素。JPEG按存储栅格标注，不额外按EXIF旋转：例如120×80、方向标记为6的图片仍使用120×80坐标；TIFF 使用解码后的尺寸。主画布提供无方向元数据的全分辨率PNG预览，因此TIFF也可在浏览器中显示。多页TIFF/动画只取首帧，显示和推理为RGB/8bit；项目原图保持不变。如果已有标注使用了不同的图片方向，请人工复核；升级不会自动调整这些坐标。
 
-训练导出时，TIFF、带旋转/镜像EXIF或动画的图片会在导出副本中改为PNG，图片列表和COCO路径同步更新，框/mask坐标不变，避免训练工具再次自动旋转图片。普通静态图片继续复制。`/images/{id}/file`接口返回的是PNG预览，不是原始文件字节。
+训练导出时，TIFF、带旋转/镜像EXIF或动画的图片会在导出副本中改为PNG，图片列表和COCO路径同步更新，框/mask坐标不变，避免训练工具再次自动旋转图片。普通静态图片继续复制。
 
 ### 工作文件与备份
 
@@ -177,9 +177,9 @@ Windows PowerShell 可设置：
 $env:HF_MODELS = "D:\models"
 ```
 
-适配器在所选目录的顶层查找权重，优先匹配该 backend 的已知 `.pt` 文件名；没有已知命名时，只接受唯一的 `.pt` 文件。存在多个候选会报错，请每个目录只放一个模型。
+AnnoDesk 在所选目录的顶层查找权重，优先匹配该 backend 的已知 `.pt` 文件名；没有匹配文件名时，只接受唯一的 `.pt` 文件。存在多个候选会报错，请每个目录只放一个模型。
 
-**当前适配器使用 Ultralytics 兼容的 `.pt` 权重。** 目录来自 Hugging Face 并不代表格式一定兼容；仅含 safetensors 的目录暂不支持。既有目录中缺少兼容权重时不会偷偷换目录或下载。0.2.0已在Apple M2 Max上实测SAM 2.1 Tiny和YOLO11n的CPU/MPS推理及双worker；不代表其他模型、CUDA或其他依赖版本均兼容。Meta官方SAM2 Hiera `.pt` 文件名由适配器映射到对应构建器，无需改名；仅Tiny已做真实权重验证。
+**请准备 Ultralytics 兼容的 `.pt` 权重。** 目录来自 Hugging Face 并不代表格式一定兼容；仅含 safetensors 的目录暂不支持。既有目录中缺少兼容权重时不会偷偷换目录或下载。已在 Apple M2 Max 上验证 SAM 2.1 Tiny 和 YOLO11n 的 CPU/MPS 推理及双 worker；其他模型、CUDA 和其他依赖版本仍需在目标环境验证。Meta 官方 SAM2 Hiera `.pt` 文件无需改名。
 
 ### 使用配置与切换模型
 
@@ -188,9 +188,9 @@ annodesk models list --models-config ./models.json
 annodesk serve --project /data/my-dataset --models-config ./models.json
 ```
 
-配置查找优先级：`--models-config` > `ANNODESK_MODELS_CONFIG` 环境变量 > 当前目录 `models.json` > 源码仓库默认（若存在）> 安装包内置默认。
+配置查找优先级：`--models-config` > `ANNODESK_MODELS_CONFIG` 环境变量 > 当前目录 `models.json` > 安装包内置默认。
 
-建议始终显式传入自己的配置文件。画布工具栏的模型入口打开居中 **Model settings** 窗口，分 Detection / Segmentation。**Available** 表示目录/权重可用，**Loaded** 表示交互执行器已加载，二者不同。**Reload** 重新读取配置，**Check classes** 检查检测类别兼容，**Load** 显式加载到所选设备；**Apply** 保存项目/模型参数，**Cancel** 丢弃未应用参数，但不会撤销已经执行的 Load。悬停不展示路径，主动展开 Diagnostics 或运行 CLI 可查看详细错误。模型目录存在不代表依赖已安装。SAM切换加载失败会丢弃未完成的模型和相关缓存，可直接重试或切回原模型重新加载，无需重启后端；窗口会重新读取实际加载状态。
+建议始终显式传入自己的配置文件。画布工具栏的模型入口打开居中 **Model settings** 窗口，分 Detection / Segmentation。**Available** 表示目录/权重可用，**Loaded** 表示模型已加载，二者不同。**Reload** 重新读取配置，**Check classes** 检查检测类别兼容，**Load** 显式加载到所选设备；**Apply** 保存项目/模型参数，**Cancel** 丢弃未应用参数，但不会撤销已经执行的 Load。悬停不展示路径，主动展开 Diagnostics 或运行 CLI 可查看详细错误。模型目录存在不代表依赖已安装。SAM 切换加载失败时，可直接重试或切回原模型重新加载，无需重启后端。
 
 ### 检测类别与项目兼容
 
@@ -214,13 +214,13 @@ names:
 
 ### 界面语言
 
-右上角语言下拉框可在 **English / 简体中文** 间即时切换。首次默认英文，选择会保存在当前浏览器站点中，刷新或重新打开后保留；浏览器禁用本地存储时仍可启动工作台并切换语言；布局从默认值开始且仍可拖动，设置仅在当前页面生效，刷新或关闭后可能不保留。此时忽略浏览器中的本地API覆盖值，使用服务端ui-config.json配置的地址或默认同源/api/v1。不同设备和浏览器可独立选择，无需重启服务。下文保留英文按钮名称以便对照。
+右上角语言下拉框可在 **English / 简体中文** 间即时切换。首次默认英文，选择会保存在当前浏览器站点中，刷新或重新打开后保留；浏览器禁用本地存储时仍可启动工作台并切换语言；布局从默认值开始且仍可拖动，设置仅在当前页面生效，刷新或关闭后可能不保留。不同设备和浏览器可独立选择，无需重启服务。下文保留英文按钮名称以便对照。
 
 工具栏、窗口、审核状态、提示和快捷键说明随语言切换；快捷键映射本身保持不变，中文输入法组合输入期间不触发单键操作。类别名、自定义标签名、模型名/ID、路径和原始诊断/日志保持原文，不更改项目数据。界面语言不会改变文本提示模型支持的语言；当前文本提示输入仍按模型要求使用英文。
 
 ### 浏览图片和设置类别
 
-左上图片列表支持 **Tree / Flat**、搜索和展开目录；搜索、展开/折叠、切换列表模式或项目时会回到列表顶部，避免沿用旧滚动位置造成空白；底部缩略图可左右滚动，图片按需加载；搜索或切换项目时回到起点，筛选后不会沿用旧偏移显示空白，普通元数据刷新保留手动滚动位置。拖动面板之间的分隔条可调整比例。
+左上图片列表支持 **Tree / Flat**、搜索和展开目录；更改搜索、目录展开状态、列表模式或项目时回到列表顶部。底部缩略图可左右滚动，按需加载；搜索或切换项目时回到起点。拖动面板之间的分隔条可调整比例。
 
 左下 **Class palette** 是赋类入口：
 
@@ -229,7 +229,7 @@ names:
 - 选中框或 mask 后，点击类别直接修改该实例。
 - 按 **C** 打开类别搜索，↑↓ 选择、Enter 确认、Esc 取消；选择模式下双击实例也可打开。
 
-顶部 **Classes** 用于增加类别、修改名称和颜色。同一类别表或 tag 表内的名称不能重复，也不能留空。名称和颜色保存期间暂时禁用该行，成功后才更新项目字典及实例显示；失败恢复原值并提示错误。类别 ID 平时保持稳定；**Reindex IDs…** 会修改整个项目的类别映射和标签文件，使用前备份项目。
+顶部 **Classes** 用于增加类别、修改名称和颜色。同一类别表或 tag 表内的名称不能重复，也不能留空。名称和颜色保存期间暂时禁用该行；失败会恢复原值并提示错误。类别 ID 平时保持稳定；**Reindex IDs…** 会修改整个项目的类别映射和标签文件，使用前备份项目。
 
 ### 画框和生成 mask
 
@@ -256,7 +256,7 @@ names:
 
 ### 同一实例的多个候选掩膜
 
-默认细化、Auto-segment、Segment current 和批量/CLI 分割始终使用单掩码。Segment current也会处理尚无mask的点/框提示草稿；框提示不产生检测框。所有正负点共同细化同一实例，批量/CLI仍仅按已有检测框补mask。遇到边界或对象层级不明确时，先选中一个带正负点或框提示、可见且未锁定的实例，再点击右侧 **Generate candidates（生成候选）**。需要在模型设置中选择可用的 SAM 视觉提示模型；当前适配 SAM / SAM2 / MobileSAM / SAM3 视觉提示，不用于文本多对象分割。不同依赖版本及真实模型需在目标环境验证。
+默认细化、Auto-segment、Segment current 和批量/CLI 分割始终使用单掩码。Segment current也会处理尚无mask的点/框提示草稿；框提示不产生检测框。所有正负点共同细化同一实例，批量/CLI仍仅按已有检测框补mask。遇到边界或对象层级不明确时，先选中一个带正负点或框提示、可见且未锁定的实例，再点击右侧 **Generate candidates（生成候选）**。需要在模型设置中选择可用的 SAM 视觉提示模型；支持 SAM / SAM2 / MobileSAM / SAM3 视觉提示，不用于文本多对象分割。不同依赖版本及真实模型需在目标环境验证。
 
 图片缩略图带上方会出现临时候选条，最多三个候选，按预测质量排序；无质量分数时只显示编号。分数是模型对 mask 质量的预测，不代表准确率或概率。点击候选切换主画布预览，一次只显示该实例的一个候选。
 
@@ -278,7 +278,7 @@ Detection 模型设置支持 Confidence、NMS IoU、Image size、Max detections�
 
 编辑会自动保存，切换图片前也会保存。底部显示保存状态；失败时查看错误并使用 **Retry save**，确认保存成功后再关闭页面。
 
-如果提示存在未完成事务，请重启后端完成恢复；恢复前不能继续保存、导出或操作回收站。推理返回空结果时会保留原标注。处理期间若图片或标注已变化，请核对最新状态后重新发起操作，旧结果不会覆盖新编辑。未分配类别的草稿同样需要满足几何和mask编码要求。
+如果提示存在未完成事务，请重启后端完成恢复；恢复前不能继续保存、导出或操作回收站。推理返回空结果时会保留原标注。处理期间若图片或标注已变化，请核对最新状态后重新发起操作，旧结果不会覆盖新编辑。
 
 右侧审核状态为：
 
@@ -291,7 +291,7 @@ Detection 模型设置支持 Confidence、NMS IoU、Image size、Max detections�
 
 Detection 与 segmentation 的前三个审核状态分别记录；Excluded 作用于整张图片，可再次点击取消。编辑标注后可能恢复为未审核，需要重新确认。
 
-顶部常驻统计栏按当前 detection / segmentation 任务汇总全项目，不受左侧搜索影响。`Reviewed = Approved + Needs review + Excluded`；四类数量互斥，相加等于总图片数。Excluded 优先，取消排除后恢复原审核状态。自动生成 mask 不增加 Reviewed。统计以成功保存的状态为准；首次构建显示 Loading statistics，空项目显示 No images。`.annodesk/statistics.sqlite3` 是可重建缓存，不是标注真值。
+顶部常驻统计栏按当前 detection / segmentation 任务汇总全项目，不受左侧搜索影响。`Reviewed = Approved + Needs review + Excluded`；四类数量互斥，相加等于总图片数。Excluded 优先，取消排除后恢复原审核状态。自动生成 mask 不增加 Reviewed。统计以成功保存的状态为准；统计加载期间显示 Loading statistics，空项目显示 No images。
 
 图片可添加自定义 tags（逗号分隔）和 notes。顶部 **Tags** 抽屉展示只读的四个内置审核状态，下方管理自定义 tag 名称和颜色。当前自定义 tag 改名不会批量迁移旧图片上的 tag 字符串，需自行核对。
 
@@ -305,9 +305,9 @@ Detection 与 segmentation 的前三个审核状态分别记录；Excluded 作�
 
 进入最终写报告阶段后仍可取消；取消只移除本次未完成目录，保留此前成功导出。
 
-YOLO polygon 对孔洞等结构可能有损，请保留原始项目及内部 RLE。保存与导出以 RLE 为准生成多边形投影；旧记录即使没有 polygons，也会从 mask 生成标签，不作为空背景导出。通过API恢复回收站图片时，会按当前类别ID重新生成YOLO标签和指纹，支持回收期间的类别重排；若引用的类别已删除则拒绝恢复，不自动重建类别。批处理或导出尚未结束时，回收站清理/恢复API返回409；点击取消后也需等待在途worker真正结束，再操作回收站。当前界面还没有 COCO 导出选项和回收站管理界面。
+YOLO polygon 无法完整保留孔洞等结构，请备份原始项目及 `.annodesk/` 中的无损 mask。当前界面尚无 COCO 导出选项和回收站管理入口。
 
-遗留全零mask不算有效分割对象；没有其他有效mask且未确认背景的图片会被跳过，避免导出为误标的负样本。
+没有有效 mask 且未确认背景的图片会被跳过，避免导出为错误的负样本。
 
 ## 6. 不打开页面，直接将检测框批量分割
 
@@ -358,9 +358,9 @@ CUDA_VISIBLE_DEVICES=2,5 annodesk segment --project /data/my-dataset \
 
 `serve`、`api`、`ui`、`segment`、`detect`、`boxes-from-masks` 为每次运行创建日志，默认 `~/.cache/annodesk/YYYY-MM-DD_HHMMSS_ffffff.log`（包括 macOS）。可通过 `--log-dir /path/to/logs --log-level DEBUG` 修改目录和文件/终端等级，默认 INFO，20MB轮转，保留14天。目录不可写时会警告并继续使用终端与内存日志，不影响标注保存。查询 help/docs/doctor/models 不创建日志文件。
 
-页面 **Logs** 抽屉宽度可拖动，未打开项目也可用。显示时间、等级和重要信息，包含模型、设备、worker READY、任务状态及错误，没有源码文件名/行号和 traceback。选择 Service 或 Current project；等级可切换 `=`（仅该等级）或 `≥`（该等级及以上），包括 SUCCESS。支持暂停/恢复、自动滚动开关、清空视图、复制当前视图和下载当前日志文件。普通轮询、逐框推理和 autosave 不刷屏，同类错误会合并显示，文件和报告保留原始错误。
+页面 **Logs** 抽屉宽度可拖动，未打开项目也可用。显示时间、等级和重要信息，包含模型、设备、worker READY、任务状态及错误，不显示文件名、行号或异常堆栈。选择 Service 或 Current project；等级可切换 `=`（仅该等级）或 `≥`（该等级及以上），包括 SUCCESS。支持暂停/恢复、自动滚动开关、清空视图、复制当前视图和下载当前日志文件。普通轮询、逐框推理和 autosave 不刷屏，同类错误会合并显示，文件和报告保留原始错误。
 
-页面只保留最多1000条，服务环形缓冲2000条，过期缺口会提示。暂停/关闭抽屉不会停止任务或日志写盘。分机部署时文件在后端电脑；单独运行的 CLI 有自己的会话文件，不自动混入另一个后端的实时 Logs。UI-only 进程的日志在其本地文件中查看，页面 Logs 连接的是所配置 API。
+页面最多显示 1000 条，日志超出保留范围时会提示；完整记录请查看日志文件。暂停/关闭抽屉不会停止任务或日志写盘。分机部署时文件在后端电脑；单独运行的 CLI 有自己的会话文件，不自动混入另一个后端的实时 Logs。UI-only 进程的日志在其本地文件中查看，页面 Logs 连接的是所配置 API。
 
 ## 7. 快捷键
 
@@ -392,7 +392,7 @@ CUDA_VISIBLE_DEVICES=2,5 annodesk segment --project /data/my-dataset \
 annodesk api --host 0.0.0.0 --port 8765 --models-config /config/models.json
 ```
 
-在提供前端页面的电脑上（同样安装基础 wheel）：
+在提供前端页面的电脑上（同样安装 AnnoDesk）：
 
 ```sh
 annodesk ui --api-url http://gpu-host:8765 --port 8080
@@ -410,7 +410,7 @@ annodesk ui --api-url http://gpu-host:8765 --port 8080
 | 页面提示 Open project | 打开数据集，或启动时传入 `--project`；不表示服务故障 |
 | 端口占用 | 换一个 `--port`，或停止原来的服务 |
 | 模型显示 missing | 检查 JSON 路径、目录解析、backend 和目录顶层权重；点击 Reload |
-| 提示 No compatible .pt checkpoint | 当前适配器不兼容该目录内容；准备兼容权重，不会自动下载或转换 |
+| 提示 No compatible .pt checkpoint | 该目录没有可用的兼容权重；准备兼容权重，不会自动下载或转换 |
 | Multiple checkpoint candidates | 为每个模型使用独立目录，避免多个候选权重 |
 | 缺少 ultralytics / torch / tokenizer | 在后端环境手动安装对应依赖；运行 `annodesk doctor` 辅助检查 |
 | Project is in use | 关闭占用该项目的另一个 AnnoDesk 服务/CLI；不要删除锁文件强行绕过 |
@@ -420,7 +420,18 @@ annodesk ui --api-url http://gpu-host:8765 --port 8080
 | 导出结果少于图片数 | 检查当前任务的审核状态、Excluded、未分配类别和空标签确认 |
 | 模型不支持或推理异常 | 基础框标注仍可用；记录模型格式、依赖版本和控制台错误进行排查 |
 
-## 10. 查阅已安装的指南
+## 10. 命令与帮助
+
+| 用途 | 命令 |
+| --- | --- |
+| 启动完整工作台 | `annodesk serve` |
+| 按已有框批量分割 | `annodesk segment` |
+| 批量生成检测框 | `annodesk detect` |
+| 从 mask 生成框 | `annodesk boxes-from-masks` |
+| 分机部署后端 / 前端 | `annodesk api` / `annodesk ui` |
+| 查看本地模型配置 | `annodesk models list` |
+| 检查推理依赖是否安装 | `annodesk doctor` |
+| 阅读或保存指南 | `annodesk docs` |
 
 ```sh
 annodesk docs

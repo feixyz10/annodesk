@@ -46,6 +46,8 @@ Resume延续原任务范围/配置，不受当前筛选和参数影响；checkpo
 
 ## 6. API与CLI
 
+0.2.1整理CLI帮助用途和顺序，移除仅开发使用的build-ui；此处三类用户批处理命令及参数保持不变。
+
 保留现有segment接口和SegmentRequest兼容，增加operation与检测/类别/审核/范围参数；当前图提供detect、boxes-from-masks端点，/jobs/preview只预览范围，/jobs支持三类任务。/models/check进行独立CPU探测与兼容检查；/models/load在交互执行器加载指定设备模型；/model-settings保存项目级模型参数，不写标注。
 
 CLI增加detect、boxes-from-masks；segment增加审核筛选。三类CLI不需要UI/HTTP，日志、退出码、报告、恢复与设备语义一致；几何任务不接受GPU/多worker配置。检测报告包含类别快照、参数、逐图结果、新增框与丢弃数量；内部存储原始置信度，不扩展YOLO标准txt列。

@@ -2,7 +2,6 @@
 
 import importlib.util
 import json
-import subprocess
 import webbrowser
 from pathlib import Path
 from typing import Annotated, Literal
@@ -74,22 +73,12 @@ def ui(
 
 
 def doctor() -> None:
-    """Report installed optional dependencies without importing the models."""
+    """Check whether optional inference dependencies are installed."""
     print(
         json.dumps(
             {name: bool(importlib.util.find_spec(name)) for name in ["torch", "ultralytics"]}
         )
     )
-
-
-def build_ui() -> None:
-    """Install frontend dependencies and build bundled assets (requires Node/npm)."""
-    root = Path(__file__).resolve().parents[2]
-    frontend = root / "frontend"
-    if not (frontend / "package.json").exists():
-        raise SystemExit("Frontend source is not available in this installation.")
-    for args in (["npm", "ci"], ["npm", "run", "build"]):
-        subprocess.run(args, cwd=frontend, check=True)
 
 
 def models(
@@ -233,7 +222,7 @@ def _run_operation(project, body, models_config, log_dir, log_level):
 
 
 def docs(output: Path | None = None) -> None:
-    """Read the bundled user guide or export it to a new Markdown file."""
+    """Read the user guide or save a Markdown copy."""
     from importlib.resources import files
 
     resource = files("annodesk").joinpath("docs/user-guide.md")
@@ -304,14 +293,18 @@ def main() -> None:
     tyro.extras.subcommand_cli_from_dict(
         {
             "serve": serve,
-            "api": api,
-            "ui": ui,
-            "doctor": doctor,
-            "docs": docs,
-            "build-ui": build_ui,
-            "models": models,
             "segment": segment,
             "detect": detect,
             "boxes-from-masks": boxes_from_masks,
-        }
+            "api": api,
+            "ui": ui,
+            "models": models,
+            "doctor": doctor,
+            "docs": docs,
+        },
+        description=(
+            "Annotate images with boxes and masks. Start the workbench with serve; "
+            "run segment, detect or boxes-from-masks for headless processing. "
+            "Use api/ui for separate deployment and models/doctor/docs for setup and help."
+        ),
     )

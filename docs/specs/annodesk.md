@@ -1,6 +1,6 @@
 # AnnoDesk 设计规范
 
-规范修订：1.5.2 · 对应 AnnoDesk 0.2.0 · 2026-10-23。本文及明确链接的版本增补合并此前讨论，作为实现与验收的设计依据；旧草案与交互原型仅供历史参考。
+规范修订：1.5.3 · 对应 AnnoDesk 0.2.1 · 2026-10-23。本文及明确链接的版本增补合并此前讨论，作为实现与验收的设计依据；旧草案与交互原型仅供历史参考。
 
 0.2.0 实现 §10.1 多 worker、§10.2 日志及 §10.3 审核统计与任务抽屉。已发布的0.1.0不包含这些新增能力；实际GPU/SAM权重验证与下文尚未实现的完整产品目标分开记录。
 
@@ -281,7 +281,7 @@ YOLO 多边形对孔洞/不连通实例可能有损，输出告警及报告；CO
 
 ## 12. CLI、构建与部署
 
-单一 console script 使用 tyro：serve、api、ui、dev、build-ui、doctor、docs、models list、segment。CLI help 不加载模型；模型配置与项目标签分离，模型只从本地读取，禁止自动下载和推理时自动安装依赖。
+单一 console script 使用 tyro，仅提供用户命令，依用途排序：serve；segment、detect、boxes-from-masks；api、ui；models list、doctor、docs。帮助开头解释启动、批处理、分机部署和诊断用途，不增加开发子命令。CLI help 不加载模型；模型配置与项目标签分离，模型只从本地读取，禁止自动下载和推理时自动安装依赖。
 
 ```bash
 uv sync
@@ -289,7 +289,8 @@ uv run annodesk serve --project /data/dataset --open
 annodesk serve --host 0.0.0.0 --port 8765
 annodesk api --host 0.0.0.0 --port 8765
 annodesk ui --port 8080 --api-url http://gpu-host:8765
-uv run annodesk build-ui
+npm ci --prefix frontend
+npm run build --prefix frontend
 uv build
 ```
 
@@ -297,7 +298,7 @@ uv build
 
 API /api/v1，info 返回应用/协议版本和能力；运行时 /ui-config.json 指定 API base，不写死 localhost、不重新编译。图片/mask/缩略图使用 ID URL，通过 HTTP 获取；跨源支持 CORS 和无 credentials 请求。SSE/任务轮询恢复按 job ID，不丢持久状态。
 
-Hatchling 打包。web_dist 作为 package data 随 wheel/sdist 发布，普通运行者不需 Node。仓库跟踪匹配的预构建资源，干净 clone 后 uv sync 即可打开 UI；前端开发使用 Node/npm lock，build-ui 执行 npm ci、类型检查、构建。uv sync 不隐式安装 Node 或 npm。发布 CI 先重建前端并检查资源版本，再 uv build，并在新环境安装 wheel 验证。安装目录只读或任意 cwd 均正常。
+Hatchling 打包。web_dist 作为 package data 随 wheel/sdist 发布，普通运行者不需 Node。仓库跟踪匹配的预构建资源，干净 clone 后 uv sync 即可打开 UI；前端开发使用 Node/npm lock，通过 npm ci 和 npm run build 执行依赖安装、类型检查与构建，不属于发布CLI。uv sync 不隐式安装 Node 或 npm。发布 CI 先重建前端并检查资源版本，再 uv build，并在新环境安装 wheel 验证。安装目录只读或任意 cwd 均正常。
 
 ### 12.1 本地模型配置与无界面分割
 
@@ -382,3 +383,7 @@ Tags 抽屉顶部始终展示四个内置审核状态及固定颜色/含义（No
 2026-10-23 发布检查覆盖已实现的并发保存/首次物化、排队推理快照、项目会话及画布手势上下文、类别/tag草稿回滚、回收站与批次互斥、坐标与虚拟列表边界。173项Python和84项前端测试、Ruff、前端构建及仓库外wheel安装冒烟通过；后者检查CLI帮助、模型列表、随包用户指南、API、静态资源及无Torch几何命令。真实权重/硬件范围仍以独立验证记录为准，不以协议假适配器测试替代。
 
 发布版本保存在包元数据及附注Git标签`v0.2.0`中；提交消息不含版本号。主要功能变更保留独立提交，发布前修复按用户确认的范围整理。
+
+## 0.2.1 CLI 与用户文档整理
+
+移除build-ui函数及CLI入口，不再从安装包调用npm或探测前端源码；已有用户命令名称和参数不变。用户指南仅保留安装/升级、配置、标注、部署、排错及必要数据格式边界，开发流程和实现说明留在README/spec；指南随wheel及PyPI长描述同步发布。0.2.0附注标签和已发布文件保持不变，0.2.1使用新提交及附注标签。

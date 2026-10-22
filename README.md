@@ -37,13 +37,17 @@ on 16 COCO images, CPU and Apple MPS (including two workers); see the
 CUDA, other model families and other dependency versions remain unverified.
 Weights are never downloaded implicitly, and are not included in distributions.
 
+Version 0.2.1 removes frontend build tooling from the user CLI, orders help by task,
+and keeps the shipped guide focused on installation, annotation and operation.
+
 ## Release verification
 
 The release regression suite covers journal recovery, first-read materialization,
 queued inference snapshots, cross-project and cross-image edits, category/tag draft
 rollback, batch/trash coordination, EXIF/TIFF coordinates and virtual-list bounds.
-The 2026-10-23 release check passed 173 Python tests and 84 frontend tests, Ruff,
+The 2026-10-23 patch release check passed 183 Python tests and 84 frontend tests, Ruff,
 the frontend build and an installed-wheel CLI/API/docs/static-resource smoke test.
+All nine user command help pages are checked without loading inference dependencies.
 Synthetic protocol tests do not extend the real hardware claims above.
 
 ## Development setup
@@ -75,7 +79,9 @@ npm run build --prefix frontend
 uv build
 ```
 
-`uv run annodesk build-ui` runs npm installation, type checking and frontend bundling.
+Frontend development uses `npm ci --prefix frontend` followed by
+`npm run build --prefix frontend` for type checking and bundling. The installed
+`annodesk` CLI exposes user commands only; the former `build-ui` command was removed.
 Commit matching `src/annodesk/web_dist` resources with frontend changes: an ordinary
 clone plus `uv sync` can then serve the workbench without Node.
 
@@ -98,7 +104,7 @@ Exports remain directory exports (no archive or browser upload/download of datas
 Tasks opens automatically when a task starts; closing it leaves a compact toolbar
 progress indicator without occupying canvas space. Logs is independent of an open project.
 
-Package and frontend metadata are aligned at 0.2.0. Releases use annotated Git tags;
+Package and frontend metadata are aligned at 0.2.1. Releases use annotated Git tags;
 commit messages describe changes without version numbers. Publishing is an explicit
 release step after checks and an outside-checkout wheel smoke test.
 
