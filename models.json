@@ -1,8 +1,31 @@
 {
   "default_model": "sam2.1-small",
   "models": [
-    {"id": "sam2.1-small", "name": "SAM 2.1 Small", "backend": "sam2", "source": "facebook/sam2.1-hiera-small"},
-    {"id": "mobile-sam", "name": "MobileSAM", "backend": "mobile_sam", "source": "dhkim2810/MobileSAM"},
-    {"id": "sam3", "name": "SAM 3", "backend": "sam3", "source": "facebook/sam3"}
-  ]
+    {
+      "id": "sam2.1-small",
+      "name": "SAM 2.1 Small",
+      "backend": "sam2",
+      "source": "facebook/sam2.1-hiera-small"
+    },
+    {
+      "id": "mobile-sam",
+      "name": "MobileSAM",
+      "backend": "mobile_sam",
+      "source": "dhkim2810/MobileSAM"
+    },
+    {
+      "id": "sam3",
+      "name": "SAM 3",
+      "backend": "sam3",
+      "source": "facebook/sam3"
+    },
+    {
+      "id": "custom-detector",
+      "name": "Custom detector",
+      "task": "detection",
+      "backend": "ultralytics",
+      "source": "custom-detector"
+    }
+  ],
+  "default_detection_model": "custom-detector"
 }

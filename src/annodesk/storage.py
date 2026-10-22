@@ -115,7 +115,7 @@ class Project:
                             raise ValueError(f"Invalid class ID in {label}") from error
         if ids and (min(ids) < 0 or max(ids) > 10000):
             raise ValueError("Class IDs must be between 0 and 10000")
-        for i in range(max(ids, default=-1) + 1):
+        for i in sorted(ids):
             self.metadata["classes"].append(
                 {
                     "id": uid(),
@@ -125,19 +125,22 @@ class Project:
                 }
             )
 
-    def write_metadata(self):
+    def metadata_outputs(self, metadata):
         config = self.root / "data.yaml"
         data = yaml.safe_load(config.read_text()) if config.exists() else {}
         if data is not None and not isinstance(data, dict):
             raise ValueError("data.yaml must contain a mapping")
         data = data or {}
-        data["names"] = {c["index"]: c["name"] for c in self.metadata["classes"]}
-        self.transaction(
-            {
-                self.private / "project.json": json.dumps(self.metadata, indent=2),
-                config: yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
-            }
-        )
+        data["names"] = {
+            c["index"]: c["name"] for c in sorted(metadata["classes"], key=lambda c: c["index"])
+        }
+        return {
+            self.private / "project.json": json.dumps(metadata, indent=2),
+            config: yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        }
+
+    def write_metadata(self):
+        self.transaction(self.metadata_outputs(self.metadata))
 
     def image_path(self, image_id: str) -> Path:
         if image_id not in self.entries:
@@ -160,7 +163,7 @@ class Project:
     def images(self) -> list[dict]:
         return list(self.entries.values())
 
-    def annotation(self, image_id: str) -> Annotation:
+    def annotation(self, image_id: str, *, materialize=True) -> Annotation:
         path = self.annotation_path(image_id)
         if path.exists():
             return Annotation.model_validate_json(path.read_text())
@@ -210,7 +213,8 @@ class Project:
                 except (ValueError, KeyError) as error:
                     raise ValueError(f"{label}:{number}: {error}") from error
         # Materialize a stable initial revision without rewriting imported YOLO files.
-        self._write_initial(image_id, ann)
+        if materialize:
+            self._write_initial(image_id, ann)
         return ann
 
     def _write_initial(self, image_id: str, annotation: Annotation):
@@ -220,14 +224,25 @@ class Project:
         ]
         atomic_write(self.annotation_path(image_id), json.dumps(record))
 
-    def save(self, image_id: str, annotation: Annotation) -> Annotation:
+    def save(self, image_id: str, annotation: Annotation, *, new_classes=None) -> Annotation:
         with self.lock:
             old = self.annotation(image_id)
             if annotation.revision != old.revision:
                 raise RevisionConflict("Annotation changed. Reload before saving.")
             self.validate_fingerprints(image_id)
             width, height = self.image_size(image_id)
-            indices = {c["id"]: c["index"] for c in self.metadata["classes"]}
+            metadata = json.loads(json.dumps(self.metadata))
+            for category in new_classes or []:
+                if any(
+                    c["id"] == category["id"]
+                    or c["index"] == category["index"]
+                    or c["name"] == category["name"]
+                    for c in metadata["classes"]
+                ):
+                    raise ValueError("New class conflicts with an existing class")
+                metadata["classes"].append(category)
+            metadata["classes"].sort(key=lambda c: c["index"])
+            indices = {c["id"]: c["index"] for c in metadata["classes"]}
             detection, segmentation = [], []
             ids = [instance.id for instance in annotation.instances]
             if len(ids) != len(set(ids)):
@@ -281,10 +296,13 @@ class Project:
             ]
             self.transaction(
                 {
+                    **(self.metadata_outputs(metadata) if new_classes else {}),
                     self.annotation_path(image_id): json.dumps(record),
                     **{self.label_path(image_id, seg): labels[int(seg)] for seg in (False, True)},
                 }
             )
+            if new_classes:
+                self.metadata = metadata
             if self.statistics is not None:
                 self.statistics.update(image_id, updated)
             return updated

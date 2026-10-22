@@ -12,6 +12,7 @@ from annodesk.devices import DevicePlan
 from annodesk.domain import Annotation
 from annodesk.inference import SegmentRequest, UltralyticsAdapter, compute_annotation
 from annodesk.models import ModelConfig, ModelRegistry
+from annodesk.operations import commit_result
 from annodesk.storage import RevisionConflict
 
 
@@ -56,8 +57,8 @@ def _worker(
         if file_stamp(Path(weights)) != stamp:
             raise ValueError("Model checkpoint changed after the job was planned")
         adapter = factory(registry, device)
-        adapter.load(model)
-        results.put(("ready", worker_id, None))
+        names = adapter.load(model)
+        results.put(("ready", worker_id, names))
     except Exception as error:
         results.put(("startup_error", worker_id, str(error)))
         return
@@ -67,6 +68,8 @@ def _worker(
             return
         image_id, path, size, annotation, body = task
         try:
+            if file_stamp(Path(weights)) != stamp:
+                raise ValueError("Model checkpoint changed after the job was planned")
             updated = compute_annotation(
                 Path(path),
                 size,
@@ -74,7 +77,19 @@ def _worker(
                 SegmentRequest.model_validate(body),
                 adapter,
             )
-            results.put(("result", worker_id, (image_id, updated.model_dump(), None)))
+            if file_stamp(Path(weights)) != stamp:
+                raise ValueError("Model checkpoint changed during processing")
+            results.put(
+                (
+                    "result",
+                    worker_id,
+                    (
+                        image_id,
+                        {**updated.model_dump(), "operation_stats": updated.operation_stats},
+                        None,
+                    ),
+                )
+            )
         except Exception as error:
             results.put(("result", worker_id, (image_id, None, str(error))))
 
@@ -111,6 +126,7 @@ class ImageExecutor:
             if entry["id"] == model:
                 entry["source"] = str(self.weights.parent)
         self.closed = False
+        self.expected_names = None
 
     def spawn(self, worker_id):
         inbox = self.context.Queue(maxsize=1)
@@ -150,7 +166,10 @@ class ImageExecutor:
                     continue
                 if kind == "startup_error":
                     raise StartupError(f"Worker {worker_id}: {payload}")
+                if self.expected_names is not None and payload != self.expected_names:
+                    raise StartupError("Model classes changed after the task was planned")
                 self.workers[worker_id].ready = True
+            self.names = payload if isinstance(payload, dict) else None
             self.events.emit(
                 "INFO",
                 f"{len(self.workers)} workers READY · {self.model} · {self.plan.workers}",
@@ -220,6 +239,12 @@ class ImageExecutor:
                         try:
                             with project.lock:
                                 ann = project.annotation(image_id)
+                                from annodesk.operations import eligible
+
+                                if not eligible(ann, body):
+                                    raise RevisionConflict(
+                                        "Image no longer matches the batch eligibility; start a new batch"
+                                    )
                                 task = (
                                     image_id,
                                     str(project.image_path(image_id)),
@@ -262,10 +287,12 @@ class ImageExecutor:
                 if annotation is not None:
                     try:
                         with project.lock:
+                            if file_stamp(self.weights) != self.stamp:
+                                raise RevisionConflict("Model checkpoint changed during processing")
                             if file_stamp(project.image_path(image_id)) != task[5]:
                                 raise RevisionConflict("Image changed during inference")
-                            annotation = project.save(
-                                image_id, Annotation.model_validate(annotation)
+                            annotation = commit_result(
+                                project, image_id, Annotation.model_validate(annotation), body
                             )
                     except Exception as failure:
                         annotation, error = None, str(failure)
@@ -276,6 +303,7 @@ class ImageExecutor:
                     {
                         "elapsed_seconds": round(time.monotonic() - worker.started, 3),
                         "attempts": retry_counts.get(image_id, 0) + 1,
+                        **(annotation.operation_stats if annotation is not None else {}),
                     },
                 )
         finally:

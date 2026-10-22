@@ -5,6 +5,10 @@ export interface Job {
   phase?: string;
   completed: number;
   processed?: number;
+  boxes_added?: number;
+  boxes_updated?: number;
+  detections_discarded?: number;
+  classes_added?: number;
   skipped: number;
   total: number;
   remaining: string[];
@@ -13,7 +17,22 @@ export interface Job {
   output?: string;
   started_at?: number;
   elapsed_seconds?: number;
-  request?: { model?: string; task?: string; format?: string };
+  request?: {
+    model?: string;
+    task?: string;
+    format?: string;
+    operation?: string;
+    imgsz?: number;
+    max_det?: number;
+    model_classes?: number[] | null;
+    recalculate_boxes?: boolean;
+    image_ids?: string[] | null;
+    confidence?: number;
+    iou?: number;
+    write_policy?: string;
+    allow_new_classes?: boolean;
+    review_states?: string[];
+  };
   model?: string;
   plan?: { device_type: string; devices: string[]; workers: string[] };
   active_workers?: Array<{

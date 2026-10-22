@@ -12,26 +12,43 @@ class ModelEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
-    backend: Literal["sam", "sam2", "mobile_sam", "sam3"]
+    backend: Literal["sam", "sam2", "mobile_sam", "sam3", "ultralytics"]
+    task: Literal["detection", "segmentation"] | None = None
+    classes_file: str | None = None
     source: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def local_only(self):
-        if "://" in self.source:
+        expected = "detection" if self.backend == "ultralytics" else "segmentation"
+        if self.task is not None and self.task != expected:
+            raise ValueError("Model task does not match its backend")
+        self.task = expected
+        if "://" in self.source or (self.classes_file and "://" in self.classes_file):
             raise ValueError("Model URLs are not allowed; use a local path or repository ID")
         return self
 
 
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    default_model: str
+    default_model: str = ""
+    default_detection_model: str = ""
     models: list[ModelEntry] = Field(min_length=1)
 
     @model_validator(mode="after")
     def unique_models(self):
         ids = [model.id for model in self.models]
-        if len(set(ids)) != len(ids) or self.default_model not in ids:
-            raise ValueError("Model IDs must be unique and default_model must exist")
+        if len(set(ids)) != len(ids):
+            raise ValueError("Model IDs must be unique")
+        for key, task in (
+            ("default_model", "segmentation"),
+            ("default_detection_model", "detection"),
+        ):
+            selected = getattr(self, key)
+            options = [m.id for m in self.models if m.task == task]
+            if selected and selected not in options:
+                raise ValueError(f"{key} must reference a {task} model")
+            if not selected and options:
+                setattr(self, key, options[0])
         return self
 
 
@@ -58,10 +75,16 @@ class ModelRegistry:
         except OSError as error:
             raise ValueError(f"Cannot read model configuration: {self.path}") from error
 
-    def entry(self, model_id: str) -> ModelEntry:
-        selected = model_id or self.config.default_model
+    def entry(self, model_id: str, task: str | None = None) -> ModelEntry:
+        selected = model_id or (
+            self.config.default_detection_model
+            if task == "detection"
+            else self.config.default_model
+        )
         for entry in self.config.models:
             if entry.id == selected:
+                if task and entry.task != task:
+                    raise ValueError(f"Model {entry.id} is not a {task} model")
                 return entry
         raise ValueError(f"Unknown model ID: {selected}. Select an ID from models.json")
 
@@ -92,6 +115,7 @@ class ModelRegistry:
             "sam2": ("sam2*.pt",),
             "mobile_sam": ("mobile_sam.pt",),
             "sam3": ("sam3*.pt",),
+            "ultralytics": ("*.pt",),
         }
         all_files = sorted(p for p in directory.glob("*.pt") if p.is_file())
         matching = sorted(
@@ -114,6 +138,22 @@ class ModelRegistry:
             )
         return candidates[0].resolve()
 
+    def classes_path(self, model_id: str) -> Path | None:
+        source = self.entry(model_id).classes_file
+        if not source:
+            return None
+        path = Path(os.path.expandvars(source)).expanduser()
+        return (path if path.is_absolute() else self.path.parent / path).resolve()
+
+    def freeze(self):
+        snapshot = ModelRegistry.__new__(ModelRegistry)
+        snapshot.path = self.path
+        snapshot.config = self.config.model_copy(deep=True)
+        for entry in snapshot.config.models:
+            if entry.classes_file:
+                entry.classes_file = str(snapshot.classes_path(entry.id))
+        return snapshot
+
     def describe(self) -> dict:
         items = []
         for entry in self.config.models:
@@ -135,6 +175,7 @@ class ModelRegistry:
         return {
             "config": str(self.path),
             "default_model": self.config.default_model,
+            "default_detection_model": self.config.default_detection_model,
             "models": items,
         }
 

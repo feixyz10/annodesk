@@ -38,7 +38,7 @@ class BatchJobs:
                 raise ValueError("A batch is already running; cancel it before starting another")
             if job_id:
                 job = self.records[job_id]
-                if job.get("kind", "segmentation") != "segmentation" or not job.get("remaining"):
+                if job.get("kind", "segmentation") == "export" or not job.get("remaining"):
                     raise ValueError("This job has no pending segmentation images")
                 # Old release jobs cannot be safely mapped to new counter semantics.
                 if "prepared" not in job:
@@ -46,7 +46,7 @@ class BatchJobs:
             else:
                 job = {
                     "id": uid(),
-                    "kind": "segmentation",
+                    "kind": body.operation,
                     **new_report(self.service.project, body),
                 }
             job.pop("error", None)
@@ -76,7 +76,7 @@ class BatchJobs:
                 kwargs["executor_factory"] = self.executor_factory
             run_batch(
                 self.service.project,
-                self.service.adapter.registry,
+                self.service.registry or self.service.adapter.registry,
                 SegmentRequest.model_validate(job["request"]),
                 job,
                 self.events,

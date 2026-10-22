@@ -111,26 +111,108 @@ def segment(
     device_type: DeviceType = "auto",
     devices: str = "auto",
     num_workers: str = "auto",
+    review_states: tuple[Literal["pending", "uncertain", "ok"], ...] = ("pending",),
     log_dir: Path | None = None,
     log_level: str = "INFO",
 ) -> None:
-    """Convert existing YOLO boxes to masks locally, without HTTP or a UI.
+    """Convert missing box masks without HTTP. Existing masks/locked/excluded items are skipped."""
+    _run_operation(
+        project,
+        _request(
+            model=model,
+            device_type=device_type,
+            devices=devices,
+            num_workers=num_workers,
+            review_states=list(review_states),
+        ),
+        models_config,
+        log_dir,
+        log_level,
+    )
 
-    Existing masks and locked/excluded objects are skipped. Run again to continue.
-    Labels are written to labels_seg; original detection boxes remain in labels.
-    """
+
+def detect(
+    project: Path,
+    model: str = "",
+    models_config: Path | None = None,
+    confidence: float = 0.25,
+    iou: float = 0.7,
+    imgsz: int = 640,
+    max_det: int = 300,
+    model_classes: tuple[int, ...] | None = None,
+    allow_new_classes: bool = False,
+    write_policy: Literal["fill_empty", "append"] = "fill_empty",
+    review_states: tuple[Literal["pending", "uncertain", "ok"], ...] = ("pending",),
+    device_type: DeviceType = "auto",
+    devices: str = "auto",
+    num_workers: str = "auto",
+    log_dir: Path | None = None,
+    log_level: str = "INFO",
+) -> None:
+    """Generate editable detection boxes using a local model and strictly compatible classes."""
+    _run_operation(
+        project,
+        _request(
+            operation="detection",
+            model=model,
+            confidence=confidence,
+            iou=iou,
+            imgsz=imgsz,
+            max_det=max_det,
+            model_classes=list(model_classes) if model_classes is not None else None,
+            allow_new_classes=allow_new_classes,
+            write_policy=write_policy,
+            review_states=list(review_states),
+            device_type=device_type,
+            devices=devices,
+            num_workers=num_workers,
+        ),
+        models_config,
+        log_dir,
+        log_level,
+    )
+
+
+def boxes_from_masks(
+    project: Path,
+    recalculate_boxes: bool = False,
+    review_states: tuple[Literal["pending", "uncertain", "ok"], ...] = ("pending",),
+    log_dir: Path | None = None,
+    log_level: str = "INFO",
+) -> None:
+    """Create explicit boxes on existing masks; CPU geometry only, no model loading."""
+    _run_operation(
+        project,
+        _request(
+            operation="boxes_from_masks",
+            device_type="cpu",
+            recalculate_boxes=recalculate_boxes,
+            review_states=list(review_states),
+        ),
+        None,
+        log_dir,
+        log_level,
+    )
+
+
+def _request(**options):
+    from annodesk.inference import SegmentRequest
+
+    try:
+        return SegmentRequest(**options)
+    except ValueError as error:
+        print(str(error))
+        raise SystemExit(2) from error
+
+
+def _run_operation(project, body, models_config, log_dir, log_level):
     from annodesk.batch import segment_dataset
-    from annodesk.devices import ExecutionOptions
     from annodesk.models import ModelRegistry
 
     events = _logging(log_dir, log_level)
     try:
         report = segment_dataset(
-            project,
-            model,
-            ModelRegistry(models_config),
-            ExecutionOptions(device_type, devices, num_workers),
-            events,
+            project, body.model, ModelRegistry(models_config), events=events, request=body
         )
     except KeyboardInterrupt as error:
         raise SystemExit(130) from error
@@ -225,5 +307,7 @@ def main() -> None:
             "build-ui": build_ui,
             "models": models,
             "segment": segment,
+            "detect": detect,
+            "boxes-from-masks": boxes_from_masks,
         }
     )

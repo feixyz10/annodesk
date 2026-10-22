@@ -12,6 +12,8 @@ from fastapi.responses import FileResponse, Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from annodesk.classes import compatible
+from annodesk.detector import inspect_classes
 from annodesk.domain import Annotation
 from annodesk.events import EventLog
 from annodesk.inference import SegmentationService, SegmentRequest, UltralyticsAdapter
@@ -20,6 +22,7 @@ from annodesk.lease import ProjectLease
 from annodesk.lifecycle import export_project, reindex_classes, restore_trash, trash_excluded
 from annodesk.masks import decode_mask
 from annodesk.models import ModelRegistry
+from annodesk.operations import preview
 from annodesk.statistics import StatisticsIndex
 from annodesk.storage import Project
 
@@ -119,7 +122,58 @@ def project_routes(
     @router.get("/models")
     def list_models():
         registry.reload()
-        return registry.describe()
+        result = registry.describe()
+        active = services.get(current.metadata["id"]) if current else None
+        result["loaded_model"] = active.adapter.loaded_id if active else ""
+        result["loaded_device"] = active.adapter.device if active else ""
+        return result
+
+    @router.post("/models/check")
+    def check_model(body: SegmentRequest):
+        frozen = registry.freeze()
+        entry = frozen.entry(body.model, body.operation)
+        frozen.weights(entry.id)
+        if entry.task == "detection":
+            names = inspect_classes(frozen, entry.id)
+            with project().lock:
+                check = compatible(names, project().metadata)
+            return {"model": entry.id, "class_names": names, "compatibility": check}
+        return {"model": entry.id, "class_names": None, "compatibility": None}
+
+    @router.post("/models/load")
+    def load_model(body: SegmentRequest):
+        item = service()
+        return item.executor.submit(item.warm, body).result()
+
+    @router.post("/model-settings")
+    def model_settings(body: SegmentRequest):
+        entry = registry.entry(body.model, body.operation)
+        if body.operation == "boxes_from_masks":
+            raise ValueError("Geometry conversion has no model settings")
+        item = project()
+        with item.lock:
+            previous = json.loads(json.dumps(item.metadata))
+            settings = body.model_dump(
+                exclude={
+                    "instance_id",
+                    "text",
+                    "class_id",
+                    "image_ids",
+                    "class_names",
+                    "class_ids",
+                    "review_states",
+                    "recalculate_boxes",
+                }
+            )
+            settings["model"] = entry.id
+            item.metadata.setdefault("model_settings", {})[entry.id] = settings
+            item.metadata.setdefault("active_models", {})[entry.task] = entry.id
+            try:
+                item.write_metadata()
+            except Exception:
+                item.metadata = previous
+                raise
+        return get_project()
 
     @router.get("/project")
     def get_project():
@@ -193,6 +247,12 @@ def project_routes(
 
     @router.post("/classes")
     def add_class(body: CategoryInput):
+        if any(
+            j.get("kind") == "detection" and j["status"] == "running"
+            for b in batches.values()
+            for j in b.records.values()
+        ):
+            raise ValueError("Wait for detection to finish before adding project classes")
         return project().add_category(body.name, body.color)
 
     @router.post("/tags")
@@ -207,6 +267,17 @@ def project_routes(
             category = next((c for c in entries if c["id"] == category_id), None)
             if category is None:
                 raise KeyError("Unknown category")
+            running_detection = any(
+                j.get("kind") == "detection" and j["status"] == "running"
+                for b in batches.values()
+                for j in b.records.values()
+            )
+            if (
+                category in item.metadata["classes"]
+                and body.name.strip() != category["name"]
+                and running_detection
+            ):
+                raise ValueError("Wait for detection to finish before renaming project classes")
             category["name"] = body.name.strip()
             if not category["name"]:
                 raise ValueError("Name must not be empty")
@@ -217,6 +288,12 @@ def project_routes(
 
     @router.post("/classes/reindex")
     def reindex(body: ReindexInput):
+        if any(
+            j.get("kind") == "detection" and j["status"] == "running"
+            for b in batches.values()
+            for j in b.records.values()
+        ):
+            raise ValueError("Wait for detection to finish before reindexing classes")
         return reindex_classes(project(), body.order)
 
     @router.post("/export")
@@ -243,11 +320,31 @@ def project_routes(
     @router.post("/images/{image_id}/segment")
     def segment(image_id: str, body: SegmentRequest):
         item = service()
-        return item.executor.submit(item.process, image_id, body).result()
+        return item.executor.submit(
+            item.process, image_id, body.model_copy(update={"operation": "segmentation"})
+        ).result()
+
+    @router.post("/images/{image_id}/detect")
+    def detect(image_id: str, body: SegmentRequest):
+        item = service()
+        return item.executor.submit(
+            item.process, image_id, body.model_copy(update={"operation": "detection"})
+        ).result()
+
+    @router.post("/images/{image_id}/boxes-from-masks")
+    def boxes_from_masks(image_id: str, body: SegmentRequest):
+        item = service()
+        return item.executor.submit(
+            item.process, image_id, body.model_copy(update={"operation": "boxes_from_masks"})
+        ).result()
 
     @router.get("/jobs")
     def list_jobs():
         return list(batch().records.values())
+
+    @router.post("/jobs/preview")
+    def preview_job(body: SegmentRequest):
+        return preview(project(), body)
 
     @router.post("/jobs")
     def create_job(body: SegmentRequest):

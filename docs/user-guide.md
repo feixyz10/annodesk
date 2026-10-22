@@ -2,7 +2,7 @@
 
 AnnoDesk 用于标注图像中的检测框和实例分割 mask，可导入已有 YOLO 检测标签，再根据框生成分割结果并人工复核。界面为英文、浅色主题，在浏览器中使用；图片、模型和标注数据保存在运行后端的电脑上。
 
-本指南对应 0.2.0。
+本指南对应 0.3.0。
 
 本指南面向安装 wheel 的使用者，不需要源码仓库、Node.js 或前端构建工具。
 
@@ -29,13 +29,13 @@ Windows PowerShell 激活环境：
 安装拿到的 wheel；文件名中的版本号以实际发布文件为准：
 
 ```sh
-python -m pip install ./annodesk-0.2.0-py3-none-any.whl
+python -m pip install ./annodesk-0.3.0-py3-none-any.whl
 ```
 
-基础安装即可使用框标注、类别、审核状态和数据管理。若需要 SAM 推理，显式安装可选依赖：
+基础安装即可使用框标注、类别、审核状态和数据管理。若需要 SAM 或检测模型推理，显式安装可选依赖：
 
 ```sh
-python -m pip install "./annodesk-0.2.0-py3-none-any.whl[inference]"
+python -m pip install "./annodesk-0.3.0-py3-none-any.whl[inference]"
 annodesk doctor
 ```
 
@@ -63,7 +63,7 @@ annodesk serve
 annodesk serve --port 8766
 ```
 
-同一数据集只允许一个 AnnoDesk 写入进程。后端打开项目期间持有跨进程写锁，独立 `segment` 命令不能同时写同一项目；先关闭项目服务。异常退出后系统会释放锁，不需要删除 lock 文件。不要在多个 Uvicorn worker 中运行同一项目。
+同一数据集只允许一个 AnnoDesk 写入进程。后端打开项目期间持有跨进程写锁，独立 `segment` / `detect` / `boxes-from-masks` 命令不能同时写同一项目；先关闭项目服务。异常退出后系统会释放锁，不需要删除 lock 文件。不要在多个 Uvicorn worker 中运行同一项目。
 
 ## 3. 准备数据集
 
@@ -100,13 +100,14 @@ labels_seg/train/camera_a/001.txt
 
 备份时保留整个工作目录，尤其不要遗漏 `.annodesk/`。YOLO polygon 不能完整表达孔洞，不能替代内部无损 mask 数据。项目已打开时不要同时用其他工具修改标签；检测到外部修改后，保存会报冲突，需要先备份并核对文件。
 
-## 4. 配置本地 SAM 模型
+## 4. 配置本地模型
 
 创建自己的 `models.json`，例如：
 
 ```json
 {
   "default_model": "sam2-small",
+  "default_detection_model": "detector",
   "models": [
     {
       "id": "sam2-small",
@@ -119,6 +120,13 @@ labels_seg/train/camera_a/001.txt
       "name": "MobileSAM",
       "backend": "mobile_sam",
       "source": "/srv/models/MobileSAM"
+    },
+    {
+      "id": "detector",
+      "name": "My detector",
+      "backend": "ultralytics",
+      "task": "detection",
+      "source": "/srv/models/my-detector"
     }
   ]
 }
@@ -126,7 +134,7 @@ labels_seg/train/camera_a/001.txt
 
 - `id`：唯一标识，供 `--model` 和默认模型引用。
 - `name`：页面显示名称。
-- `backend`：`sam`、`sam2`、`mobile_sam` 或 `sam3`。
+- `backend`：`sam`、`sam2`、`mobile_sam`、`sam3`，检测使用 `ultralytics`。
 - `source`：模型的最终一级文件夹，不填写 `.pt` / `.safetensors` 文件，也不填写 `checkpoint` 字段。
 
 ### 目录查找规则
@@ -164,7 +172,25 @@ annodesk serve --project /data/my-dataset --models-config ./models.json
 
 配置查找优先级：`--models-config` > `ANNODESK_MODELS_CONFIG` 环境变量 > 当前目录 `models.json` > 源码仓库默认（若存在）> 安装包内置默认。
 
-建议始终显式传入自己的配置文件。页面顶部选择模型，修改 JSON 或放好模型后点击 **Reload**；`(missing)` 表示目录或兼容权重未就绪，悬停只显示简短状态，不展示服务端路径或原始错误；详细目录检查结果使用 `annodesk models list --models-config ./models.json` 查看。模型目录存在不代表推理依赖已经全部安装。
+建议始终显式传入自己的配置文件。画布工具栏的模型入口打开居中 **Model settings** 窗口，分 Detection / Segmentation。**Available** 表示目录/权重可用，**Loaded** 表示交互执行器已加载，二者不同。**Reload** 重新读取配置，**Check classes** 检查检测类别兼容，**Load** 显式加载到所选设备；**Apply** 保存项目/模型参数，**Cancel** 丢弃未应用参数，但不会撤销已经执行的 Load。悬停不展示路径，主动展开 Diagnostics 或运行 CLI 可查看详细错误。模型目录存在不代表依赖已安装。
+
+### 检测类别与项目兼容
+
+标准 Ultralytics 检测 `.pt` 通常带有类别名称（参见[官方预测说明](https://docs.ultralytics.com/modes/predict/)）。缺少可靠名称或只有 `class_0` 等占位名时，在模型条目中增加 `"classes_file": "detector-classes.yaml"`，例如：
+
+```yaml
+names:
+  0: cat
+  1: dog
+```
+
+也支持 JSON 的 `names` 数组/字典。文件相对 `models.json` 解析，也可绝对路径，不使用 `HF_MODELS` 回退；模型类别必须为连续的 `0..nc-1`。权重和文件都有可靠名称时必须完全一致，文件不能覆盖真实类别。仅含 state_dict 的任意第三方模型文件不保证可加载。
+
+模型和项目的 `(ID, name)` 必须完全一致，或任一集合是另一集合的子集。任何冲突都报错，不自动重映射 ID 或忽略大小写。导入现有 YOLO 数据时应提供正确的 `data.yaml`，占位名称不会自动等同于真实类别。
+
+**Allow new classes from this model** 默认关闭：丢弃超出项目的检测类别；开启时只在某张图片的检测结果通过筛选且保存成功后才引入实际出现的类别，保持原模型 ID。可从空项目开始，但关闭该开关且没有可接收类别会报错。此设置按项目/模型保存。检测批任务运行期间请等待任务结束后再新增、改名或重排项目类别，颜色仍可调整。
+
+工作类别 ID 可有空洞，重新打开不会补齐。这样的 `data.yaml` 不保证可直接训练；使用 Export 生成连续 ID 的训练副本和 `class-id-map.json`，工作项目保持不变。
 
 ## 5. 在页面中标注
 
@@ -190,13 +216,23 @@ annodesk serve --project /data/my-dataset --models-config ./models.json
 
 仅需要 mask、不希望保存检测框时，使用 **Box prompt: mask only**，或用正负点建立提示，再执行分割。框提示与显式检测框分开保存。正点用于包含区域，负点用于排除区域。文本提示工具只适用于支持文本提示的 SAM 3 模型，需先设置默认类别。
 
-开启 **Auto-segment** 后，切换到含待处理检测框的图片会自动发起分割。**Batch…** 对整个项目的已有框进行批量处理，可设置 Device type、逻辑 CUDA devices 和 Workers（规则同第6节）。开始后关闭配置窗，自动打开右侧 **Tasks** 抽屉（默认600px，可拖动，窄屏最大占满窗口）。抽屉展开显示开始时间、耗时、完整蓝色进度条、成功/失败/跳过/剩余数量、只读执行配置与 worker 表。扫描、加载模型时显示不定进度动画，不伪造百分比。
+开启 **Auto-segment** 后，切到含待处理检测框的图片会自动分割。切换到 Detection 时可使用 **Detect current** 和 **Auto-detect**（默认关闭），后者仅对 Not reviewed、未排除且没有实例的图片自动检测。
 
-关闭抽屉只折叠界面，顶部保留 `Tasks ◌ 60/75` 和细进度线，可随时重新打开；不占用额外画布空间。抽屉展示 worker 当前图片和耗时、失败原因、取消/继续及 View logs 操作，历史任务默认折叠。取消停止新任务派发，当前在途图片完成保存后生效。恢复同一任务保留原快照、模型/设备计划和计数，只处理 remaining；失败图片在修复原因后另建批次重试。任务结束时短暂提示结果；存在错误时 Tasks 保留错误标记，不会自动抢焦点。断开浏览器不会取消后台任务。
+**Batch…** 打开批量配置，选择 Detect boxes、Segment existing boxes 或 Boxes from masks；范围可为全项目或当前搜索结果。默认只处理目标任务的 Not reviewed，可显式加入 Needs review / Approved；Excluded 始终跳过。检测和 mask 转框按 Detection 状态，SAM 按 Segmentation 状态。**Preview scope** 只读检查范围，显示各类跳过和损坏输入数量；检测还会检查类别兼容。开始时重新验证并冻结配置/范围。设备和 worker 规则见第6节。
+
+任务启动自动打开居中 **Tasks** 非模态窗口，约900px，可调整大小；关闭只收起，标注和后台任务继续，顶部保留 `Tasks ◌ 60/75` 和细进度线。窗口显示完整进度、开始时间/耗时、成功/失败/跳过/剩余、检测框与新增类别数量、参数快照、worker 当前图片及错误。扫描、模型加载、最终导出阶段显示不定进度动画，不伪造百分比。统计栏始终常驻。
+
+取消停止新派发，在途图片保存后生效。恢复延续原范围和模型/设备/参数快照，只处理 remaining；权重或类别表变化需要新建任务。排队期间若图片已被人工改为不符合筛选条件，会拒绝处理并记入失败，保留人工审核。失败图片在修复原因后另建批次重试。结束通知不抢焦点，断开浏览器不会取消任务，Logs 仍在独立右侧抽屉。
 
 进度的 `finished = succeeded + failed`，分母排除跳过项；成功只在标注保存后计数。例如 `60/75 finished · 58 succeeded · 2 failed · 25 skipped` 仍有15张未处理。启动失败只报告一次任务错误，不把整个数据集伪装成逐图失败。
 
 选中实例可在右侧删除、锁定或隐藏。锁定后先解锁才能改类；隐藏只影响显示，不等于从导出中移除。画布支持滚轮局部缩放；右上角集中放置 **Pan**、缩放与 **Fit image**，平移不放在左侧标注工具栏。Pan按钮可切换，按住Space也可临时平移。
+
+### 自动生成检测框
+
+Detection 模型设置支持 Confidence、NMS IoU、Image size、Max detections、模型类别筛选和设备。默认 **Empty images only**，已有任意实例时不处理；显式选择 **Append with duplicate checks** 才允许追加，按同类别 IoU≥0.7 跳过重复框，保留已有人工框和 mask。置信度保留在内部实例中，YOLO txt 不增加额外列。生成新框后 Detection 变为 Not reviewed；没有检测结果不自动确认空背景。
+
+选中 mask 后右侧 **Create box from mask** 可生成同一实例的框；已有框可用 **Recalculate box** 显式替换。当前图片 **Create missing boxes** 与批量 Boxes from masks 默认只补缺框，跳过锁定实例。此操作只做 CPU 几何计算，不加载模型，保留 mask/类别/实例 ID，只重置 Detection 审核。以后修改 mask 不会自动同步框，需主动重算；普通 SAM mask-only 标注仍不保存框。
 
 ### 保存、复核与标签
 
@@ -223,7 +259,7 @@ Detection 与 segmentation 的前三个审核状态分别记录；Excluded 作�
 
 默认跳过未审核、Needs review、Excluded 和含未分配类别实例的图片；无对象图片需明确勾选 **Confirm no objects for this task** 并复核通过，才能作为空标签样本导出。
 
-导出同样自动打开 Tasks 抽屉，收起后由顶部轻量入口显示进度，按已检查图片数推进，最终写报告阶段显示动画。取消后删除本次不完整导出。完成后结果位于后端项目的 `.annodesk/exports/<id>/`，Tasks 显示路径；当前导出为目录，不额外压缩成归档。导出目录包含复制的图片、标准 `labels/`、类别配置及报告；分割工作目录中的 `labels_seg/` 在导出副本中转换为标准 `labels/`。导出类别 ID 可能连续重排，工作项目不受影响。
+导出同样自动打开 Tasks 窗口，收起后由顶部轻量入口显示进度，按已检查图片数推进，最终写报告阶段显示动画。取消后删除本次不完整导出。完成后结果位于后端项目的 `.annodesk/exports/<id>/`，Tasks 显示路径；当前导出为目录，不额外压缩成归档。导出目录包含复制的图片、标准 `labels/`、类别配置及报告；分割工作目录中的 `labels_seg/` 在导出副本中转换为标准 `labels/`。`class-id-map.json` 记录工作数字 ID 到导出 ID 的对应。导出类别 ID 会连续重排，工作项目不受影响。
 
 YOLO polygon 对孔洞等结构可能有损，请保留原始项目及内部 RLE。当前界面还没有 COCO 导出选项和回收站管理界面。
 
@@ -236,13 +272,27 @@ annodesk segment --project /data/my-dataset --models-config ./models.json --mode
 省略 `--model` 使用 JSON 中的 `default_model`。该命令不启动 HTTP 服务或浏览器。
 
 - 保留 detection 框及类别，分割写入 `labels_seg/`，内部保存无损 RLE。
-- 跳过已有 mask、锁定实例和 Excluded 图片。
+- 默认只处理 Segmentation 的 Not reviewed；跳过已有 mask、锁定实例和 Excluded 图片。
+- 可用 `--review-states pending uncertain ok` 显式扩大审核范围，不授权覆盖人工结果。
 - 每张图片独立保存；中断后再次运行可跳过已完成结果。
 - 控制台显示任务阶段和汇总；执行计划及逐图结果位于 `.annodesk/segment-report.json`。
 - 第一次 Ctrl+C 停止派发并保存当前在途结果；第二次强制终止。未保存的结果不会算成功。
 - 退出码：0完成且无单图失败；1存在单图失败；2配置/设备/启动失败；130取消/中断。
 
 生成结果仍需在页面人工复核，命令不会自动标为 Approved。
+
+### 无界面检测与 mask 转框
+
+```sh
+annodesk detect --project /data/my-dataset --models-config ./models.json \
+  --model detector --allow-new-classes --confidence 0.3 \
+  --device-type cuda --devices 0,1 --num-workers 3
+annodesk boxes-from-masks --project /data/my-dataset
+```
+
+检测默认只处理 Detection 的 Not reviewed 且没有实例的图片；`--write-policy append` 显式追加，`--model-classes 0 1` 筛选模型类别，阈值/IoU/尺寸/最大检测数可配置。报告为 `.annodesk/detect-report.json`。`--model` 始终是配置 ID，不是权重文件名。
+
+mask 转框不需要可用模型或 Torch；`--recalculate-boxes` 允许替换未锁定框。报告为 `.annodesk/boxes-from-masks-report.json`。两者均支持 `--review-states pending uncertain ok`；默认只有 pending。退出码、项目锁、日志、取消语义与 segment 相同，详细选项见对应 `--help`。
 
 ### 设备与 worker
 
@@ -258,7 +308,7 @@ CUDA_VISIBLE_DEVICES=2,5 annodesk segment --project /data/my-dataset \
 
 ### 日志
 
-`serve`、`api`、`ui`、`segment` 为每次运行创建日志，默认 `~/.cache/annodesk/YYYY-MM-DD_HHMMSS_ffffff.log`（包括 macOS）。可通过 `--log-dir /path/to/logs --log-level DEBUG` 修改目录和文件/终端等级，默认 INFO，20MB轮转，保留14天。目录不可写时会警告并继续使用终端与内存日志，不影响标注保存。查询 help/docs/doctor/models 不创建日志文件。
+`serve`、`api`、`ui`、`segment`、`detect`、`boxes-from-masks` 为每次运行创建日志，默认 `~/.cache/annodesk/YYYY-MM-DD_HHMMSS_ffffff.log`（包括 macOS）。可通过 `--log-dir /path/to/logs --log-level DEBUG` 修改目录和文件/终端等级，默认 INFO，20MB轮转，保留14天。目录不可写时会警告并继续使用终端与内存日志，不影响标注保存。查询 help/docs/doctor/models 不创建日志文件。
 
 页面 **Logs** 抽屉宽度可拖动，未打开项目也可用。显示时间、等级和重要信息，包含模型、设备、worker READY、任务状态及错误，没有源码文件名/行号和 traceback。选择 Service 或 Current project；等级可切换 `=`（仅该等级）或 `≥`（该等级及以上），包括 SUCCESS。支持暂停/恢复、自动滚动开关、清空视图、复制当前视图和下载当前日志文件。普通轮询、逐框推理和 autosave 不刷屏，同类错误会合并显示，文件和报告保留原始错误。
 
@@ -329,6 +379,8 @@ annodesk docs
 annodesk docs --output ./AnnoDesk-user-guide.md
 annodesk --help
 annodesk segment --help
+annodesk detect --help
+annodesk boxes-from-masks --help
 ```
 
 `annodesk docs` 输出随当前安装版本发布的本指南；`--output` 导出 Markdown，目标文件已存在时不会覆盖。升级安装包后，可用该命令获取对应版本的说明。

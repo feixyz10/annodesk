@@ -150,7 +150,7 @@ function draw() {
           y = Math.max(0, Math.min(a.height - h, shape.y()));
         if (object.box) object.box = [x, y, x + w, y + h];
         else object.prompt_box = [x, y, x + w, y + h];
-        store.changed(true);
+        store.changed(object.box ? "detection" : "segmentation");
       });
       shape.on("transformstart", () => store.checkpoint());
       shape.on("transformend", () => {
@@ -166,7 +166,7 @@ function draw() {
           );
         if (object.box) object.box = [x, y, x + w, y + h];
         else object.prompt_box = [x, y, x + w, y + h];
-        store.changed(true);
+        store.changed(object.box ? "detection" : "segmentation");
       });
       layer.add(shape);
       if (
@@ -201,7 +201,12 @@ function draw() {
   layer.batchDraw();
 }
 function key(e: KeyboardEvent) {
-  if ((e.target as HTMLElement).closest("input,textarea,select,button")) return;
+  if (
+    (e.target as HTMLElement).closest(
+      "input,textarea,select,button,[role=dialog],[contenteditable=true]",
+    )
+  )
+    return;
   if (e.code === "Space") {
     e.preventDefault();
     space = true;
@@ -262,7 +267,7 @@ onMounted(() => {
         store.selected = obj.id;
       }
       obj.points.push({ x: p.x, y: p.y, positive: store.tool === "positive" });
-      store.changed(true);
+      store.changed("segmentation");
     } else if (e.target === stage || e.target instanceof Konva.Image)
       store.selected = null;
   });
@@ -295,7 +300,7 @@ onMounted(() => {
     if (store.tool === "promptbox") obj.prompt_box = [x, y, x2, y2];
     a.instances.push(obj);
     store.selected = obj.id;
-    store.changed(true);
+    store.changed(store.tool === "box" ? "detection" : "segmentation");
   });
   window.addEventListener("keydown", key);
   window.addEventListener("keyup", release);

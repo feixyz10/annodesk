@@ -29,6 +29,9 @@ class Instance(BaseModel):
     hidden: bool = False
     locked: bool = False
     source: str = "manual"
+    model_class_index: int | None = Field(default=None, ge=0)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    box_source: str = "manual"
 
     @model_validator(mode="after")
     def geometry(self):
@@ -42,6 +45,7 @@ class Instance(BaseModel):
 
 
 class Annotation(BaseModel):
+    operation_stats: dict[str, int] = Field(default_factory=dict, exclude=True)
     revision: int = Field(default=0, ge=0)
     instances: list[Instance] = Field(default_factory=list)
     detection_review: Literal["pending", "ok", "uncertain"] = "pending"

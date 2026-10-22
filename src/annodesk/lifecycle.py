@@ -143,7 +143,7 @@ def export_project(
     with project.lock:
         output = project.private / "exports" / uid()
         output.mkdir(parents=True)
-        categories = project.metadata["classes"]
+        categories = sorted(project.metadata["classes"], key=lambda c: c["index"])
         indices = {c["id"]: i for i, c in enumerate(categories)}
         report = {"exported": 0, "skipped": [], "warnings": []}
         config = {"path": ".", "names": {i: c["name"] for i, c in enumerate(categories)}}
@@ -258,6 +258,10 @@ def export_project(
             )
         atomic_write(
             output / "data.yaml", yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
+        )
+        atomic_write(
+            output / "class-id-map.json",
+            json.dumps({c["index"]: indices[c["id"]] for c in categories}, indent=2),
         )
         atomic_write(output / "report.json", json.dumps(report, indent=2))
         if format == "coco":

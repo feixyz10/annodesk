@@ -13,8 +13,15 @@ class Adapter:
         self.registry, self.device = registry, device
 
     def load(self, model):
+        if self.registry.entry(model).task == "detection":
+            from annodesk.classes import read_classes
+
+            return read_classes(self.registry.classes_path(model))
         if model == "startup-fail":
             raise ValueError("Model load failed")
+
+    def detect(self, path, body):
+        return [{"box": [1, 2, 9, 10], "class_index": 2, "confidence": 0.9}]
 
     def predict(self, path, model, *_):
         if model == "fail":

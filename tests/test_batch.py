@@ -50,7 +50,11 @@ def test_headless_converts_yolo_keeps_classes_and_resumes(tmp_path):
     assert label.read_text().startswith("2 ")
     project = Project(tmp_path)
     obj = project.annotation(project.images()[0]["id"]).instances[0]
-    assert obj.mask and obj.box and obj.class_id == project.metadata["classes"][2]["id"]
+    assert (
+        obj.mask
+        and obj.box
+        and obj.class_id == next(c for c in project.metadata["classes"] if c["index"] == 2)["id"]
+    )
     second = segment_dataset(
         tmp_path, "", registry, executor_factory=executor, available={"cuda": 0, "mps": False}
     )
@@ -205,3 +209,28 @@ def test_crashed_workers_stop_without_counting_uncommitted_images(tmp_path):
     assert len(report["remaining"]) == 0 and len(report["failed"]) == 1
     assert report["results"][-1]["attempts"] == 2
     assert len([e for e in events.events if e["event_type"] == "worker_crash"]) == 1
+
+
+def test_dispatch_rechecks_review_and_rejects_replaced_checkpoint(tmp_path):
+    from annodesk.devices import DevicePlan
+    from annodesk.events import EventLog
+    from annodesk.inference import SegmentRequest
+
+    registry = dataset(tmp_path, count=2)
+    project = Project(tmp_path)
+    ids = list(project.entries)
+    pool = executor(registry, "test", DevicePlan("cpu", ["cpu"], ["cpu"]), EventLog())
+    pool.start()
+    try:
+        ann = project.annotation(ids[0])
+        ann.segmentation_review = "ok"
+        project.save(ids[0], ann)
+        registry.weights("test").write_bytes(b"replacement checkpoint")
+        results = []
+        pool.run(project, ids, SegmentRequest(model="test"), lambda *args: results.append(args))
+        assert len(results) == 2
+        assert "eligibility" in results[0][2]
+        assert "checkpoint changed" in results[1][2]
+        assert not any(project.annotation(i).instances[0].mask for i in ids)
+    finally:
+        pool.close()

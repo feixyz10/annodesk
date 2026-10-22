@@ -1,6 +1,6 @@
 # Working on AnnoDesk
 
-Read `docs/specs/annodesk.md` before changing behavior. It records the product contract;
+Read `docs/specs/annodesk.md` and its `assisted-boxes.md` extension before changing behavior. It records the product contract;
 `docs/user-guide.md` is the guide shipped inside the wheel, and `README.md` describes development.
 Update these documents together when behavior or commands change. Clearly distinguish implemented
 features from future targets and hardware validation that has not been performed.
@@ -19,7 +19,7 @@ features from future targets and hardware validation that has not been performed
   Keep dispatch/results bounded, acquire the project write lease at runtime boundaries, and preserve
   revision/fingerprint validation and journaled saves.
 - Internal annotation JSON/RLE is authoritative. `labels` and `labels_seg` are YOLO projections.
-  Never invent detection boxes for mask-only annotations or mark automatic masks human-approved.
+  Only create mask-derived boxes through the explicit geometry operation; never invent detection boxes for ordinary mask-only annotations or mark automatic masks human-approved.
 - Statistics SQLite is disposable derived metadata. Log failures must not lose committed annotations.
 - Log important business events explicitly; keep polling, per-box and autosave noise out of UI logs.
   Never log credentials or expanded exception locals.
@@ -51,3 +51,9 @@ previews/screenshots under ignored `docs/design-previews/`. Do not commit models
 caches, local credentials or execution notes. Use `rg` for search and meaningful tests for risky
 state transitions. When reviews are requested, evaluate findings individually, fix reproducible
 issues, and reject unrelated or speculative work with a brief reason.
+
+Detector class mappings must match exact (numeric ID, name) subsets. Never silently remap IDs,
+restore deleted classes, or create unused model classes. New classes and successful image labels
+commit in the same journaled transaction. Working IDs may be sparse; exports use a continuous
+copy with `class-id-map.json`. Geometry-only operations must not import Torch or load models.
+Models and Tasks use central windows; project review statistics remain permanently visible.

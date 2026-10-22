@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, computed, watch } from "vue";
+import {
+  onMounted,
+  onBeforeUnmount,
+  ref,
+  computed,
+  watch,
+  defineAsyncComponent,
+} from "vue";
 import {
   NConfigProvider,
   NDrawer,
@@ -18,7 +25,13 @@ import FastTooltip from "./components/FastTooltip.vue";
 import ClassPicker from "./components/ClassPicker.vue";
 import StatisticsBar from "./components/StatisticsBar.vue";
 import LogDrawer from "./components/LogDrawer.vue";
-import TaskDrawer from "./components/TaskDrawer.vue";
+const ModelSettings = defineAsyncComponent(
+  () => import("./components/ModelSettings.vue"),
+);
+const BatchSetup = defineAsyncComponent(
+  () => import("./components/BatchSetup.vue"),
+);
+import TaskWindow from "./components/TaskWindow.vue";
 import { type Job, isPreparing } from "./tasks";
 import { reviewStates } from "./review";
 const store = useProject(),
@@ -154,9 +167,10 @@ function key(e: KeyboardEvent) {
     classesOpen.value ||
     tagsOpen.value ||
     help.value ||
-    jobsOpen.value ||
+    (e.target as HTMLElement).closest(".task-window") ||
     logsOpen.value ||
     batchSettings.value ||
+    modelSettings.value ||
     store.classPickerOpen
   )
     return;
@@ -239,17 +253,30 @@ async function reindex() {
 const jobsOpen = ref(false),
   logsOpen = ref(false),
   batchSettings = ref(false),
-  deviceType = ref("auto"),
-  devices = ref("auto"),
-  numWorkers = ref("auto"),
+  modelSettings = ref(false),
   jobs = ref<Job[]>([]);
+const currentModel = computed(() =>
+  store.models?.models.find(
+    (m) =>
+      m.id ===
+      (store.task === "detection" ? store.detectionModel : store.model),
+  ),
+);
+const currentModelState = computed(() =>
+  !currentModel.value?.available
+    ? "Unavailable"
+    : store.models?.loaded_model === currentModel.value.id
+      ? "Loaded"
+      : "Available",
+);
 const taskNotice = ref("");
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 const lastJob = computed(() => jobs.value.at(-1));
 const activeJob = computed(() =>
   jobs.value.find((j) => j.status === "running"),
 );
-let jobsGeneration = 0;
+let jobsGeneration = 0,
+  lastClassRefresh = 0;
 watch(
   () => store.meta?.id,
   () => {
@@ -267,12 +294,25 @@ async function refreshJobs() {
   try {
     const result = await request<Job[]>("/jobs");
     if (token === jobsGeneration && project === store.meta?.id) {
-      const previous = jobs.value.find((j) => j.status === "running");
+      const previous = new Map(jobs.value.map((j) => [j.id, j.status]));
       jobs.value = result;
-      const finished =
-        previous &&
-        result.find((j) => j.id === previous.id && j.status !== "running");
+      if (
+        result.some((j) => j.kind === "detection" && j.status === "running") &&
+        Date.now() - lastClassRefresh > 2000
+      ) {
+        lastClassRefresh = Date.now();
+        void store.refreshMeta().catch((e) => (store.error = String(e)));
+      }
+      const finished = [...result]
+        .reverse()
+        .find(
+          (j) =>
+            j.status !== "running" &&
+            (!previous.has(j.id) || previous.get(j.id) === "running"),
+        );
       if (finished) {
+        void store.refreshMeta().catch((e) => (store.error = String(e)));
+        void store.refreshCurrent().catch((e) => (store.error = String(e)));
         taskNotice.value = `${finished.kind === "export" ? "Export" : "Batch"} ${finished.status} · ${finished.failed.length} failed`;
         if (noticeTimer) clearTimeout(noticeTimer);
         noticeTimer = setTimeout(() => (taskNotice.value = ""), 6000);
@@ -282,21 +322,9 @@ async function refreshJobs() {
     store.error = String(e);
   }
 }
-async function startBatch() {
-  try {
-    await store.save();
-    await request("/jobs", "POST", {
-      model: store.model,
-      device_type: deviceType.value,
-      devices: devices.value,
-      num_workers: numWorkers.value,
-    });
-    batchSettings.value = false;
-    jobsOpen.value = true;
-    await refreshJobs();
-  } catch (e) {
-    store.error = String(e);
-  }
+async function batchStarted() {
+  jobsOpen.value = true;
+  await refreshJobs();
 }
 async function jobAction(id: string, resume = false) {
   try {
@@ -384,7 +412,7 @@ onBeforeUnmount(() => {
           aria-label="Dataset operations"
         >
           <button
-            title="Segment existing boxes across the dataset"
+            title="Detect boxes, segment existing boxes, or create boxes from masks"
             :disabled="!store.meta"
             @click="batchSettings = true"
           >
@@ -407,7 +435,7 @@ onBeforeUnmount(() => {
             class="task-button"
             @click="jobsOpen = true"
             :disabled="!store.meta"
-            title="Batch segmentation and export progress; closing the drawer keeps tasks running"
+            title="Batch processing and export progress; closing the window keeps tasks running"
           >
             <span v-if="activeJob" class="task-spinner" aria-hidden="true" />
             Tasks<span v-if="activeJob">
@@ -501,42 +529,49 @@ onBeforeUnmount(() => {
         </nav>
         <section class="center">
           <div class="canvasbar">
-            <select
-              v-model="store.model"
-              aria-label="Segmentation model"
-              :title="
-                store.models?.models.find((m) => m.id === store.model)
-                  ?.available === false
-                  ? 'Model unavailable. Check your model configuration or select another model.'
-                  : 'Choose a local segmentation model. No automatic downloads.'
-              "
-            >
-              <option
-                v-for="m in store.models?.models ?? []"
-                :key="m.id"
-                :value="m.id"
-              >
-                {{ m.name }}{{ m.available ? "" : " (missing)" }}
-              </option>
-            </select>
             <button
-              title="Reload models.json and check local model files"
-              @click="store.refreshModels()"
+              class="model-summary"
+              :disabled="!store.meta"
+              title="Choose a model, load it, and configure inference"
+              @click="modelSettings = true"
             >
-              Reload
+              {{ store.task === "detection" ? "Detector" : "SAM" }}:
+              {{ currentModel?.name || "Choose model" }}
+              <small>{{ currentModelState }}</small>
             </button>
             <button
               class="primary"
-              title="Segment existing boxes without a mask in the current image"
-              :disabled="!store.meta"
-              @click="store.segment(true)"
+              :disabled="
+                !store.meta ||
+                (store.task === 'detection' && !store.detectionModel)
+              "
+              @click="
+                store.task === 'detection'
+                  ? store.detect()
+                  : store.segment(true)
+              "
             >
-              Segment current
+              {{
+                store.task === "detection"
+                  ? "Detect current"
+                  : "Segment current"
+              }}
             </button>
-            <label title="Only boxes without a mask are processed"
-              ><input type="checkbox" v-model="store.autoSegment" />
+            <label
+              v-if="store.task === 'segmentation'"
+              title="Process missing masks when switching images"
+              ><input v-model="store.autoSegment" type="checkbox" />
               Auto-segment</label
-            ><span class="grow"></span>
+            >
+            <label v-else title="Detect empty, unreviewed images when switching"
+              ><input
+                v-model="store.autoDetect"
+                type="checkbox"
+                :disabled="!store.detectionModel"
+              />
+              Auto-detect</label
+            >
+            <span class="grow" />
             <div
               class="view-tools"
               role="toolbar"
@@ -720,13 +755,17 @@ onBeforeUnmount(() => {
                     {{ c.name }}
                   </option>
                 </select>
+                <p v-if="store.object.confidence != null" class="muted">
+                  Original detection confidence:
+                  {{ (store.object.confidence * 100).toFixed(1) }}%
+                </p>
                 <div v-if="store.object.box" class="coords">
                   <label v-for="(_, i) in store.object.box"
                     >{{ ["x1", "y1", "x2", "y2"][i]
                     }}<input
                       type="number"
                       v-model.number="store.object.box[i]"
-                      @change="store.changed(true)"
+                      @change="store.changed('detection')"
                   /></label>
                 </div>
                 <div class="row">
@@ -753,9 +792,31 @@ onBeforeUnmount(() => {
                   >
                     Delete object</button
                   ><button @click="store.segment()">Refine mask</button>
+                  <button
+                    v-if="store.object.mask || store.object.polygons.length"
+                    :disabled="store.object.locked"
+                    @click="store.boxesFromMasks(true, !!store.object.box)"
+                  >
+                    {{
+                      store.object.box
+                        ? "Recalculate box from mask"
+                        : "Create box from mask"
+                    }}
+                  </button>
                 </div></template
               >
-              <p v-else class="muted">
+              <button
+                v-if="
+                  store.annotation?.instances.some(
+                    (o) => o.mask || o.polygons.length,
+                  )
+                "
+                title="Create only missing boxes; preserve masks, classes and locked instances"
+                @click="store.boxesFromMasks()"
+              >
+                Create missing boxes from masks
+              </button>
+              <p v-if="!store.object" class="muted">
                 Select an object to inspect or edit it.
               </p>
             </div></template
@@ -788,45 +849,16 @@ onBeforeUnmount(() => {
           <NButton type="primary" @click="openProject">Open</NButton>
         </div></NModal
       >
-      <NModal
+      <ModelSettings v-model:show="modelSettings" />
+      <BatchSetup
         v-model:show="batchSettings"
-        preset="card"
-        title="Batch segmentation"
-        style="width: 440px; max-width: 95vw"
-      >
-        <p>
-          Process missing masks from existing boxes. Existing masks, locked
-          objects and excluded images are skipped.
-        </p>
-        <label
-          >Device type
-          <select v-model="deviceType">
-            <option v-for="device in ['auto', 'cuda', 'cpu', 'mps']">
-              {{ device }}
-            </option>
-          </select></label
-        >
-        <label
-          >Logical CUDA devices
-          <input
-            v-model="devices"
-            placeholder="auto or 0,1"
-            title="Indices after CUDA_VISIBLE_DEVICES filtering; CPU/MPS require auto"
-        /></label>
-        <label
-          >Workers
-          <input
-            v-model="numWorkers"
-            placeholder="auto or positive integer"
-            title="Auto: one worker per selected CUDA device, otherwise one"
-        /></label>
-        <p class="muted">
-          Each worker loads a model copy. Multiple workers on one GPU require
-          more memory.
-        </p>
-        <button class="primary" @click="startBatch">Start batch</button>
-      </NModal>
-      <TaskDrawer
+        @started="batchStarted"
+        @models="
+          batchSettings = false;
+          modelSettings = true;
+        "
+      />
+      <TaskWindow
         v-model:show="jobsOpen"
         :jobs="jobs"
         :images="store.images"

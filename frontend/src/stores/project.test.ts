@@ -200,3 +200,45 @@ describe("quick class assignment", () => {
     expect(s.dirty).toBe(false);
   });
 });
+
+describe("assisted annotation", () => {
+  it("changes detection geometry without clearing segmentation review", () => {
+    const s = initialized();
+    s.annotation!.instances[0].box = [1, 1, 9, 9];
+    s.changed("detection");
+    expect(s.annotation!.detection_review).toBe("pending");
+    expect(s.annotation!.segmentation_review).toBe("ok");
+  });
+  it("does not apply a late detection result to another image", async () => {
+    const s = initialized(),
+      pending = deferred<Annotation>();
+    s.detectionModel = "det";
+    mock.mockImplementation(async (path) =>
+      path.endsWith("/detect") ? pending.promise : ann(),
+    );
+    const run = s.detect();
+    await Promise.resolve();
+    await Promise.resolve();
+    await s.load(s.images[1]);
+    pending.resolve({ ...ann(), instances: [], revision: 1 });
+    await run;
+    expect(s.current?.id).toBe("b");
+    expect(s.annotation!.instances).toHaveLength(1);
+  });
+  it("preserves local edits made during mask-to-box processing", async () => {
+    const s = initialized(),
+      pending = deferred<Annotation>();
+    mock.mockImplementation(async (path) =>
+      path.endsWith("/boxes-from-masks") ? pending.promise : ann(),
+    );
+    const run = s.boxesFromMasks();
+    await Promise.resolve();
+    await Promise.resolve();
+    s.annotation!.notes = "new human notes";
+    s.changed();
+    pending.resolve({ ...ann(), notes: "old", revision: 1 });
+    await run;
+    expect(s.annotation!.notes).toBe("new human notes");
+    expect(s.error).toContain("newer edits");
+  });
+});

@@ -22,7 +22,7 @@ def test_import_save_and_clear(tmp_path):
     item = project.images()[0]
     ann = project.annotation(item["id"])
     assert ann.instances[0].box == [30, 20, 70, 60]
-    assert project.metadata["classes"][2]["name"] == "class_2"
+    assert next(c for c in project.metadata["classes"] if c["index"] == 2)["name"] == "class_2"
     saved = project.save(item["id"], ann)
     assert saved.revision == 1
     with pytest.raises(RevisionConflict):

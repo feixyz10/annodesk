@@ -54,6 +54,9 @@ export interface Instance {
   hidden: boolean;
   locked: boolean;
   source: string;
+  confidence?: number | null;
+  model_class_index?: number | null;
+  box_source?: string;
 }
 export interface Annotation {
   revision: number;
@@ -73,6 +76,8 @@ export interface ProjectMeta {
   classes: Category[];
   tags: Category[];
   image_count: number;
+  active_models?: Partial<Record<"detection" | "segmentation", string>>;
+  model_settings?: Record<string, ModelParameters>;
 }
 export function instance(
   category: string | null,
@@ -92,10 +97,42 @@ export function instance(
   };
 }
 
+export type Operation = "detection" | "segmentation" | "boxes_from_masks";
+export interface ModelParameters {
+  model: string;
+  operation: Operation;
+  device_type: "auto" | "cuda" | "cpu" | "mps";
+  devices: string;
+  confidence: number;
+  iou: number;
+  imgsz: number;
+  max_det: number;
+  model_classes: number[] | null;
+  allow_new_classes: boolean;
+  write_policy: "fill_empty" | "append";
+}
+export interface ModelCheck {
+  model: string;
+  loaded?: boolean;
+  device?: string;
+  class_names: Record<string, string> | null;
+  compatibility: {
+    relation: string;
+    accepted_classes: number;
+    extra_classes: Array<{ index: number; name: string }>;
+  } | null;
+}
+export interface ScopePreview {
+  input_total: number;
+  total: number;
+  counts: Record<string, number>;
+  errors: Array<{ image: string; error: string }>;
+}
 export interface ModelOption {
   id: string;
   name: string;
   backend: string;
+  task?: "detection" | "segmentation";
   available: boolean;
   path: string | null;
   error: string | null;
@@ -104,5 +141,8 @@ export interface ModelOption {
 export interface ModelsConfig {
   config: string;
   default_model: string;
+  default_detection_model?: string;
+  loaded_model?: string;
+  loaded_device?: string;
   models: ModelOption[];
 }

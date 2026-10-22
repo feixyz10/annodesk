@@ -7,6 +7,8 @@ import {
   type ImageItem,
   type ProjectMeta,
   type ModelsConfig,
+  type Operation,
+  type ModelParameters,
 } from "../api";
 
 export const useProject = defineStore("project", () => {
@@ -25,6 +27,8 @@ export const useProject = defineStore("project", () => {
     tool = ref("select"),
     search = ref(""),
     autoSegment = ref(false),
+    autoDetect = ref(false),
+    detectionModel = ref(""),
     model = ref("");
   const models = ref<ModelsConfig | null>(null);
   async function refreshModels() {
@@ -32,9 +36,74 @@ export const useProject = defineStore("project", () => {
       models.value = await request<ModelsConfig>("/models");
       if (!models.value.models.some((m) => m.id === model.value))
         model.value = models.value.default_model;
+      if (
+        !models.value.models.some(
+          (m) => m.id === detectionModel.value && m.task === "detection",
+        )
+      )
+        detectionModel.value = models.value.default_detection_model || "";
+      syncModels();
     } catch (e) {
       error.value = String(e);
     }
+  }
+  function syncModels() {
+    if (
+      meta.value?.active_models?.segmentation &&
+      models.value?.models.some(
+        (m) => m.id === meta.value?.active_models?.segmentation,
+      )
+    )
+      model.value = meta.value.active_models.segmentation;
+    if (
+      meta.value?.active_models?.detection &&
+      models.value?.models.some(
+        (m) => m.id === meta.value?.active_models?.detection,
+      )
+    )
+      detectionModel.value = meta.value.active_models.detection;
+  }
+  function parameters(
+    operation: Operation,
+    selectedModel?: string,
+  ): ModelParameters {
+    const id =
+      selectedModel ??
+      (operation === "detection" ? detectionModel.value : model.value);
+    return {
+      confidence: 0.25,
+      iou: 0.7,
+      imgsz: 640,
+      max_det: 300,
+      model_classes: null,
+      allow_new_classes: false,
+      write_policy: "fill_empty",
+      device_type: "auto",
+      devices: "auto",
+      ...meta.value?.model_settings?.[id],
+      model: id,
+      operation,
+    };
+  }
+  async function refreshMeta() {
+    const projectId = meta.value?.id;
+    const updated = await request<ProjectMeta>("/project");
+    if (updated?.id === projectId) {
+      meta.value = updated;
+      syncModels();
+    }
+  }
+  async function applyModel(settings: ModelParameters) {
+    await save();
+    const projectId = meta.value?.id;
+    const updated = await request<ProjectMeta>(
+      "/model-settings",
+      "POST",
+      settings,
+    );
+    if (updated.id !== projectId || meta.value?.id !== projectId) return;
+    meta.value = updated;
+    syncModels();
   }
   const history = ref<string[]>([]),
     future = ref<string[]>([]);
@@ -65,7 +134,7 @@ export const useProject = defineStore("project", () => {
         geometry === true
           ? ["detection_review", "segmentation_review"]
           : geometry === "detection"
-            ? ["detection_review", "segmentation_review"]
+            ? ["detection_review"]
             : ["segmentation_review"];
       for (const key of affected as (
         "detection_review" | "segmentation_review"
@@ -124,6 +193,16 @@ export const useProject = defineStore("project", () => {
       history.value = [];
       future.value = [];
       if (
+        task.value === "detection" &&
+        autoDetect.value &&
+        loaded.detection_review === "pending" &&
+        !loaded.excluded &&
+        !loaded.instances.length &&
+        detectionModel.value
+      )
+        void detect();
+      if (
+        task.value === "segmentation" &&
         autoSegment.value &&
         loaded.instances.some((o) => o.box && !o.mask && !o.polygons.length)
       )
@@ -151,6 +230,7 @@ export const useProject = defineStore("project", () => {
       if (all.length >= page.total) break;
     }
     images.value = all;
+    syncModels();
     if (!meta.value.classes.some((c) => c.id === defaultClass.value))
       defaultClass.value = meta.value.classes[0]?.id ?? null;
   }
@@ -230,7 +310,7 @@ export const useProject = defineStore("project", () => {
         `/images/${imageId}/segment`,
         "POST",
         {
-          model: model.value,
+          ...parameters("segmentation"),
           instance_id: onlyMissing ? null : selected.value,
           text,
           class_id: defaultClass.value,
@@ -247,6 +327,64 @@ export const useProject = defineStore("project", () => {
     } catch (e) {
       error.value = String(e);
     }
+  }
+  async function assist(
+    operation: "detection" | "boxes_from_masks",
+    selected = false,
+    recalculate = false,
+  ) {
+    if (!annotation.value || !current.value) return;
+    try {
+      await save();
+      const imageId = current.value!.id,
+        projectId = meta.value?.id,
+        captured = version;
+      const updated = await request<Annotation>(
+        `/images/${imageId}/${operation === "detection" ? "detect" : "boxes-from-masks"}`,
+        "POST",
+        {
+          ...parameters(operation),
+          model: operation === "detection" ? detectionModel.value : "",
+          instance_id: selected ? selectedValue() : null,
+          recalculate_boxes: recalculate,
+        },
+      );
+      if (current.value?.id !== imageId || meta.value?.id !== projectId) return;
+      if (version !== captured) {
+        error.value =
+          "Processing finished after newer edits. Your edits were kept; reload to reconcile.";
+        return;
+      }
+      checkpoint();
+      annotation.value = { ...annotation.value!, ...updated };
+      if (operation === "detection") await refreshMeta();
+      error.value = "";
+    } catch (e) {
+      error.value = String(e);
+    }
+  }
+  function selectedValue() {
+    return selected.value;
+  }
+  function detect() {
+    return assist("detection");
+  }
+  function boxesFromMasks(selected = false, recalculate = false) {
+    return assist("boxes_from_masks", selected, recalculate);
+  }
+  async function refreshCurrent() {
+    if (!current.value || dirty.value || navigating.value) return;
+    const imageId = current.value.id,
+      projectId = meta.value?.id,
+      captured = version;
+    const updated = await request<Annotation>(`/images/${imageId}/annotation`);
+    if (
+      current.value?.id === imageId &&
+      meta.value?.id === projectId &&
+      version === captured &&
+      !dirty.value
+    )
+      annotation.value = updated;
   }
   return {
     meta,
@@ -269,6 +407,14 @@ export const useProject = defineStore("project", () => {
     history,
     future,
     autoSegment,
+    autoDetect,
+    detectionModel,
+    parameters,
+    refreshMeta,
+    applyModel,
+    refreshCurrent,
+    detect,
+    boxesFromMasks,
     model,
     models,
     refreshModels,

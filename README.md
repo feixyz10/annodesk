@@ -10,9 +10,11 @@ This README is for repository development.
 ## Design and implementation scope
 
 The complete target design is in [docs/specs/annodesk.md](docs/specs/annodesk.md).
-Version 0.2.0 adds spawned multi-device segmentation, a cross-process project write
-lease, Loguru/SSE logs, persistent review statistics and visible segmentation/export
-progress. The full specification is not a completion claim. Remaining items include
+Version 0.3.0 adds offline YOLO detection preannotation, strict detector/project class
+validation, lazy transactional class creation, mask-to-box geometry, review-aware batch
+scopes, and central Models/Tasks windows. See the [0.3 specification](docs/specs/assisted-boxes.md).
+Spawned multi-device processing, a project write lease, Loguru/SSE logs and persistent
+review statistics remain shared infrastructure. The full specification is not a completion claim. Remaining items include
 class deletion/migration UI, trash/restore UI, export options/report UI, configurable
 shortcuts, class favorites/virtualization and small-screen inspector access.
 
@@ -74,5 +76,10 @@ Exports remain directory exports (no archive or browser upload/download of datas
 Tasks opens automatically when a task starts; closing it leaves a compact toolbar
 progress indicator without occupying canvas space. Logs is independent of an open project.
 
-Python/version metadata and frontend package versions are 0.2.0. This source version
+Python/version metadata and frontend package versions are 0.3.0. This source version
 has not been published by a build or commit; publication remains a separate action.
+
+Detection adapters return candidates without project access; `operations.py` validates
+strict numeric class mappings and commits new classes with annotations in one journaled
+transaction. Working class IDs may be sparse; exports contain continuous IDs and
+`class-id-map.json`. `boxes-from-masks` uses CPU geometry without Torch or model loading.

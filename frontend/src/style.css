@@ -733,3 +733,22 @@ kbd {
     padding-left: 10px;
   }
 }
+
+.model-summary {
+  max-width: 240px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.model-summary small {
+  color: #64748b;
+  font-size: 10px;
+}
+.canvasbar:has(.model-summary) label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
