@@ -91,7 +91,9 @@ const scroll = ref(0),
       class="file"
       :class="{ active: row.id === store.current?.id }"
       :style="{ paddingLeft: 10 + row.depth * 14 + 'px' }"
-      :title="row.key"
+      :title="
+        row.folder ? row.key : store.images.find((i) => i.id === row.id)?.path
+      "
       @click="
         row.folder
           ? toggle(row.key)

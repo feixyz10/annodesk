@@ -129,3 +129,74 @@ describe("annotation concurrency", () => {
     expect(s.defaultClass).toBe("newc");
   });
 });
+
+describe("startup and model configuration", () => {
+  it("handles a server with no open project", async () => {
+    const s = initialized();
+    mock.mockResolvedValue(null);
+    await s.refresh();
+    expect(s.meta).toBeNull();
+    expect(s.current).toBeNull();
+    expect(s.images).toEqual([]);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+  it("loads model IDs from the server and preserves a valid selection", async () => {
+    const s = useProject();
+    const models = {
+      config: "/models.json",
+      default_model: "small",
+      models: [
+        {
+          id: "small",
+          name: "Small",
+          backend: "sam2",
+          available: true,
+          path: "/small.pt",
+          error: null,
+          text_prompts: false,
+        },
+        {
+          id: "mobile",
+          name: "Mobile",
+          backend: "mobile_sam",
+          available: false,
+          path: null,
+          error: "missing",
+          text_prompts: false,
+        },
+      ],
+    };
+    mock.mockResolvedValue(models);
+    await s.refreshModels();
+    expect(s.model).toBe("small");
+    s.model = "mobile";
+    await s.refreshModels();
+    expect(s.model).toBe("mobile");
+    expect(s.models?.models[1].available).toBe(false);
+  });
+});
+
+describe("quick class assignment", () => {
+  it("changes only the selected annotation and remains undoable", () => {
+    const s = initialized();
+    const geometry = JSON.stringify(s.annotation!.instances[0].box);
+    s.selected = s.annotation!.instances[0].id;
+    s.openClassPicker();
+    expect(s.classPickerOpen).toBe(true);
+    s.assign("another-class");
+    expect(s.object?.class_id).toBe("another-class");
+    expect(JSON.stringify(s.object?.box)).toBe(geometry);
+    s.undo();
+    expect(s.annotation!.instances[0].class_id).toBe("c");
+  });
+  it("does not change a locked instance or open the picker", () => {
+    const s = initialized();
+    s.selected = s.annotation!.instances[0].id;
+    s.annotation!.instances[0].locked = true;
+    s.openClassPicker();
+    s.assign("another-class");
+    expect(s.classPickerOpen).toBe(false);
+    expect(s.object?.class_id).toBe("c");
+    expect(s.dirty).toBe(false);
+  });
+});

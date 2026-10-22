@@ -19,13 +19,18 @@ async function add() {
     <div class="section">
       <div class="row">
         <strong>Class palette</strong
-        ><button @click="store.selected = null">New objects</button>
+        ><button
+          title="Deselect the current object to choose the class for new annotations"
+          @click="store.selected = null"
+        >
+          Default class
+        </button>
       </div>
       <p class="context">
         {{
           store.object
-            ? "Assign to selected object"
-            : "New objects: " +
+            ? "Class for selected object"
+            : "Default for new annotations: " +
               (store.meta?.classes.find((c) => c.id === store.defaultClass)
                 ?.name ?? "Unassigned")
         }}
@@ -38,8 +43,16 @@ async function add() {
         :key="c.id"
         class="class-item"
         :class="{
-          active: (store.object?.class_id ?? store.defaultClass) === c.id,
+          active:
+            (store.object ? store.object.class_id : store.defaultClass) ===
+            c.id,
         }"
+        :title="
+          (store.object
+            ? 'Assign selected annotation to '
+            : 'Default class for new annotations: ') + c.name
+        "
+        :disabled="!!store.object?.locked"
         @click="store.assign(c.id)"
       >
         <i :style="{ background: c.color }"></i><span>{{ c.name }}</span

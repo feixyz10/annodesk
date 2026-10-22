@@ -13,10 +13,11 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from annodesk.domain import Annotation
-from annodesk.inference import SegmentationService, SegmentRequest
+from annodesk.inference import SegmentationService, SegmentRequest, UltralyticsAdapter
 from annodesk.jobs import BatchJobs
 from annodesk.lifecycle import export_project, reindex_classes, restore_trash, trash_excluded
 from annodesk.masks import decode_mask
+from annodesk.models import ModelRegistry
 from annodesk.storage import Project
 
 
@@ -39,9 +40,10 @@ class CategoryInput(BaseModel):
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
 
 
-def project_routes(initial: Path | None = None) -> APIRouter:
+def project_routes(initial: Path | None = None, models_config: Path | None = None) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
     current = Project(initial) if initial else None
+    registry = ModelRegistry(models_config)
 
     services = {}
     batches = {}
@@ -53,7 +55,9 @@ def project_routes(initial: Path | None = None) -> APIRouter:
             if existing is not None:
                 existing.close()
             batches.pop(item.metadata["id"], None)
-            services[item.metadata["id"]] = SegmentationService(item)
+            services[item.metadata["id"]] = SegmentationService(
+                item, adapter=UltralyticsAdapter(registry)
+            )
         return services[item.metadata["id"]]
 
     def batch():
@@ -80,8 +84,15 @@ def project_routes(initial: Path | None = None) -> APIRouter:
         current = replacement
         return {**current.metadata, "root": str(current.root), "image_count": len(current.entries)}
 
+    @router.get("/models")
+    def list_models():
+        registry.reload()
+        return registry.describe()
+
     @router.get("/project")
     def get_project():
+        if current is None:
+            return None
         item = project()
         return {**item.metadata, "root": str(item.root), "image_count": len(item.entries)}
 

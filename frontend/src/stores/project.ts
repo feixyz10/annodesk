@@ -6,6 +6,7 @@ import {
   type Category,
   type ImageItem,
   type ProjectMeta,
+  type ModelsConfig,
 } from "../api";
 
 export const useProject = defineStore("project", () => {
@@ -15,6 +16,7 @@ export const useProject = defineStore("project", () => {
     annotation = ref<Annotation | null>(null);
   const selected = ref<string | null>(null),
     defaultClass = ref<string | null>(null),
+    classPickerOpen = ref(false),
     error = ref(""),
     saving = ref(false),
     navigating = ref(false),
@@ -23,7 +25,17 @@ export const useProject = defineStore("project", () => {
     tool = ref("select"),
     search = ref(""),
     autoSegment = ref(false),
-    model = ref("sam2.1_s.pt");
+    model = ref("");
+  const models = ref<ModelsConfig | null>(null);
+  async function refreshModels() {
+    try {
+      models.value = await request<ModelsConfig>("/models");
+      if (!models.value.models.some((m) => m.id === model.value))
+        model.value = models.value.default_model;
+    } catch (e) {
+      error.value = String(e);
+    }
+  }
   const history = ref<string[]>([]),
     future = ref<string[]>([]);
   let version = 0,
@@ -123,7 +135,13 @@ export const useProject = defineStore("project", () => {
     }
   }
   async function refresh() {
-    meta.value = await request<ProjectMeta>("/project");
+    meta.value = await request<ProjectMeta | null>("/project");
+    if (!meta.value) {
+      images.value = [];
+      current.value = null;
+      annotation.value = null;
+      return;
+    }
     const all: ImageItem[] = [];
     for (let offset = 0; ; offset += 1000) {
       const page = await request<{ items: ImageItem[]; total: number }>(
@@ -159,8 +177,16 @@ export const useProject = defineStore("project", () => {
       error.value = String(e);
     }
   }
+  function openClassPicker() {
+    if (!object.value || navigating.value) return;
+    if (object.value.locked) {
+      error.value = "Unlock this annotation before changing its class.";
+      return;
+    }
+    classPickerOpen.value = true;
+  }
   function assign(id: string) {
-    if (navigating.value) return;
+    if (navigating.value || object.value?.locked) return;
     if (object.value) {
       checkpoint();
       object.value.class_id = id;
@@ -229,6 +255,8 @@ export const useProject = defineStore("project", () => {
     annotation,
     selected,
     defaultClass,
+    classPickerOpen,
+    openClassPicker,
     error,
     saving,
     navigating,
@@ -242,6 +270,8 @@ export const useProject = defineStore("project", () => {
     future,
     autoSegment,
     model,
+    models,
+    refreshModels,
     checkpoint,
     changed,
     save,

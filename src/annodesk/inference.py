@@ -1,59 +1,62 @@
 """Optional real SAM inference and revision-aware annotation replacement."""
 
 import importlib.util
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-from platformdirs import user_cache_path
 from pydantic import BaseModel
 
 from annodesk.domain import Instance
 from annodesk.masks import contours, encode_mask
+from annodesk.models import ModelRegistry
+from annodesk.offline import offline_inference
 from annodesk.storage import Project
 
 
 class SegmentRequest(BaseModel):
-    model: str = "sam2.1_s.pt"
+    model: str = ""
     instance_id: str | None = None
     text: str = ""
     class_id: str | None = None
 
 
 class UltralyticsAdapter:
-    def __init__(self):
+    def __init__(self, registry: ModelRegistry | None = None):
+        self.registry = registry or ModelRegistry()
         self.predictor = None
         self.key = None
         self.image_key = None
 
     def predict(self, path: Path, model: str, box, points, text: str):
+        entry = self.registry.entry(model)
+        weights = self.registry.weights(model)
+        if text and entry.backend != "sam3":
+            raise ValueError("Text prompts require a SAM 3 model")
+        try:
+            with offline_inference():
+                return self._predict(path, weights, entry.backend, box, points, text)
+        except (RuntimeError, ImportError, OSError) as error:
+            raise ValueError(f"Local model {entry.id} failed: {error}") from error
+
+    def _predict(self, path, weights, backend, box, points, text):
         if importlib.util.find_spec("ultralytics") is None:
             raise ValueError("Install inference support with: uv sync --extra inference")
-        weights = Path(model).expanduser()
-        if not weights.is_file():
-            weights = user_cache_path("annodesk") / "models" / Path(model).name
-        if not weights.is_file():
-            raise ValueError(
-                f"Model weights not found: {model}. Use annodesk models fetch or provide a local path."
-            )
-        key = (str(weights.resolve()), bool(text))
+        key = (str(weights), weights.stat().st_mtime_ns, backend, bool(text))
         if self.key != key:
             if text:
-                if "sam3" not in weights.name:
-                    raise ValueError("Text prompts require a SAM 3 model")
                 from ultralytics.models.sam import SAM3SemanticPredictor
 
                 cls = SAM3SemanticPredictor
             else:
                 from ultralytics.models.sam import Predictor, SAM2Predictor
 
-                if "sam3" in weights.name:
+                if backend == "sam3":
                     from ultralytics.models.sam import SAM3Predictor
 
                     cls = SAM3Predictor
                 else:
-                    cls = SAM2Predictor if "sam2" in weights.name else Predictor
+                    cls = SAM2Predictor if backend == "sam2" else Predictor
             self.predictor = None
             self.predictor = cls(
                 overrides={
@@ -93,13 +96,13 @@ class SegmentationService:
         self.adapter = adapter or UltralyticsAdapter()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="annodesk-inference")
         self.active = False
-        self.jobs: dict[str, dict] = {}
-        self.job_lock = threading.RLock()
 
     def close(self):
         self.executor.shutdown(wait=False, cancel_futures=True)
 
     def process(self, image_id: str, body: SegmentRequest):
+        if isinstance(self.adapter, UltralyticsAdapter):
+            body = body.model_copy(update={"model": self.adapter.registry.entry(body.model).id})
         self.active = True
         try:
             return self._process(image_id, body)

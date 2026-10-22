@@ -15,6 +15,7 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8765,
     open: bool = False,
+    models_config: Path | None = None,
 ) -> None:
     """Start the annotation API and bundled workbench."""
     import uvicorn
@@ -23,16 +24,23 @@ def serve(
 
     if open:
         webbrowser.open(f"http://{host}:{port}")
-    uvicorn.run(create_app(project=project), host=host, port=port)
+    uvicorn.run(create_app(project=project, models_config=models_config), host=host, port=port)
 
 
-def api(project: Path | None = None, host: str = "127.0.0.1", port: int = 8765) -> None:
+def api(
+    project: Path | None = None,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    models_config: Path | None = None,
+) -> None:
     """Start only the API; dataset paths refer to this machine."""
     import uvicorn
 
     from annodesk.app import create_app
 
-    uvicorn.run(create_app(mode="api", project=project), host=host, port=port)
+    uvicorn.run(
+        create_app(mode="api", project=project, models_config=models_config), host=host, port=port
+    )
 
 
 def ui(api_url: str, host: str = "127.0.0.1", port: int = 8080) -> None:
@@ -64,41 +72,53 @@ def build_ui() -> None:
 
 
 def models(
-    action: Annotated[Literal["list", "fetch"], tyro.conf.Positional] = "list",
-    name: Annotated[str, tyro.conf.Positional] = "sam2.1_s.pt",
+    action: Annotated[Literal["list"], tyro.conf.Positional] = "list",
+    models_config: Path | None = None,
 ) -> None:
-    """List model files or explicitly fetch an Ultralytics model checkpoint."""
-    from platformdirs import user_cache_path
+    """List configured local models and resolution errors. Never download files."""
+    from annodesk.models import ModelRegistry
 
-    cache = user_cache_path("annodesk") / "models"
-    supported = ["sam2.1_s.pt", "mobile_sam.pt", "sam3.pt"]
-    if action == "list":
-        print(
-            json.dumps(
-                [
-                    {"name": n, "path": str(cache / n), "available": (cache / n).is_file()}
-                    for n in supported
-                ],
-                indent=2,
-            )
-        )
-        return
-    if name not in supported:
-        raise SystemExit("Unknown model. Use a local checkpoint path in the workbench.")
-    if name == "sam3.pt":
-        raise SystemExit(
-            "SAM 3 weights may require access approval. Place your authorized checkpoint at "
-            + str(cache / name)
-        )
-    if importlib.util.find_spec("ultralytics") is None:
-        raise SystemExit("Install the model runtime first: uv sync --extra inference")
-    from ultralytics.utils.downloads import attempt_download_asset
+    ModelRegistry(models_config).print_json()
 
-    cache.mkdir(parents=True, exist_ok=True)
-    result = Path(attempt_download_asset(str(cache / name)))
-    if not result.is_file():
-        raise SystemExit("Download failed; provide a local checkpoint instead.")
-    print(result)
+
+def segment(project: Path, model: str = "", models_config: Path | None = None) -> None:
+    """Convert existing YOLO boxes to masks locally, without HTTP or a UI.
+
+    Existing masks and locked/excluded objects are skipped. Run again to continue.
+    Labels are written to labels_seg; original detection boxes remain in labels.
+    """
+    from annodesk.batch import segment_dataset
+    from annodesk.models import ModelRegistry
+
+    try:
+        report = segment_dataset(project, model, ModelRegistry(models_config))
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    print(json.dumps(report, indent=2))
+    if report["failed"]:
+        raise SystemExit(1)
+
+
+def docs(output: Path | None = None) -> None:
+    """Read the bundled user guide or export it to a new Markdown file."""
+    from importlib.resources import files
+
+    resource = files("annodesk").joinpath("docs/user-guide.md")
+    source = Path(__file__).resolve().parents[2] / "docs/user-guide.md"
+    content = (
+        resource.read_text(encoding="utf-8")
+        if resource.is_file()
+        else source.read_text(encoding="utf-8")
+    )
+    if output is None:
+        print(content, end="")
+    else:
+        try:
+            with output.expanduser().open("x", encoding="utf-8") as stream:
+                stream.write(content)
+        except FileExistsError as error:
+            raise SystemExit(f"File already exists; choose another output: {output}") from error
+        print(output.expanduser().resolve())
 
 
 def main() -> None:
@@ -108,7 +128,9 @@ def main() -> None:
             "api": api,
             "ui": ui,
             "doctor": doctor,
+            "docs": docs,
             "build-ui": build_ui,
             "models": models,
+            "segment": segment,
         }
     )

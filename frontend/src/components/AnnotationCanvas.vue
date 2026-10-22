@@ -16,6 +16,15 @@ let stage: Konva.Stage,
   transformer: Konva.Transformer;
 const maskCache = new Map<string, HTMLImageElement>(),
   loadingMasks = new Set<string>();
+let lastSelection = { id: "", time: 0 };
+function selectObject(id: string) {
+  if (store.tool !== "select") return;
+  const now = performance.now();
+  const twice = lastSelection.id === id && now - lastSelection.time < 350;
+  lastSelection = { id, time: twice ? 0 : now };
+  store.selected = id;
+  if (twice) store.openClassPicker();
+}
 function fit() {
   if (!stage || !store.annotation) return;
   const a = store.annotation;
@@ -111,9 +120,7 @@ function draw() {
         strokeWidth: 1.5,
         strokeScaleEnabled: false,
       });
-      shape.on("click tap", () => {
-        store.selected = object.id;
-      });
+      shape.on("click tap", () => selectObject(object.id));
       layer.add(shape);
     }
     const box = object.box ?? object.prompt_box;
@@ -132,7 +139,7 @@ function draw() {
       shape.on("mousedown touchstart", (e) => {
         if (store.tool === "select") {
           e.cancelBubble = true;
-          store.selected = object.id;
+          selectObject(object.id);
         }
       });
       shape.on("dragstart", () => store.checkpoint());

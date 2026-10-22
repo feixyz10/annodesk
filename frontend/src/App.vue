@@ -14,6 +14,9 @@ import ImageList from "./components/ImageList.vue";
 import ClassPalette from "./components/ClassPalette.vue";
 import FilmStrip from "./components/FilmStrip.vue";
 import Icon from "./components/Icon.vue";
+import FastTooltip from "./components/FastTooltip.vue";
+import ClassPicker from "./components/ClassPicker.vue";
+import { reviewStates } from "./review";
 const store = useProject(),
   canvas = ref<InstanceType<typeof AnnotationCanvas>>(),
   openDialog = ref(false),
@@ -27,7 +30,7 @@ const left = ref(Number(localStorage.getItem("lb-left")) || 260),
   right = ref(Number(localStorage.getItem("lb-right")) || 290),
   top = ref(Number(localStorage.getItem("lb-top")) || 53);
 const shortcuts = [
-  ["Previous / next image", "A / D"],
+  ["Previous / next image", "A / D or ← / →"],
   ["Select / draw box", "V / R"],
   ["Positive / negative point", "Q / E"],
   ["Box / text prompt", "B / T"],
@@ -36,9 +39,11 @@ const shortcuts = [
   ["Pan", "Hold Space"],
   ["Zoom in / out", "+ / -"],
   ["Approve / needs review / exclude", "1 / 2 / 3"],
-  ["Delete selected", "Delete"],
-  ["Undo / redo", "Ctrl/⌘ Z / Shift Z"],
-  ["Save", "Ctrl/⌘ S"],
+  ["Change selected annotation class", "C or double-click"],
+  ["Delete selected", "X or Delete"],
+  ["Undo", "Ctrl+Z or ⌘Z"],
+  ["Redo", "Ctrl+Shift+Z or ⌘Shift+Z"],
+  ["Save", "Ctrl+S or ⌘S"],
   ["Shortcuts", "?"],
 ];
 const tools = [
@@ -145,7 +150,8 @@ function key(e: KeyboardEvent) {
     openDialog.value ||
     classesOpen.value ||
     tagsOpen.value ||
-    help.value
+    help.value ||
+    store.classPickerOpen
   )
     return;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
@@ -165,12 +171,19 @@ function key(e: KeyboardEvent) {
   )
     return;
   const k = e.key.toLowerCase();
-  if (k === "a") store.move(-1);
-  else if (k === "d") store.move(1);
-  else if (k === "f") canvas.value?.fit();
+  if (k === "a" || k === "arrowleft") {
+    e.preventDefault();
+    store.move(-1);
+  } else if (k === "d" || k === "arrowright") {
+    e.preventDefault();
+    store.move(1);
+  } else if (k === "c") {
+    e.preventDefault();
+    store.openClassPicker();
+  } else if (k === "f") canvas.value?.fit();
   else if (k === "+" || k === "=") canvas.value?.zoom(1.25);
   else if (k === "-") canvas.value?.zoom(0.8);
-  else if (k === "delete" || k === "backspace") {
+  else if (k === "x" || k === "delete" || k === "backspace") {
     e.preventDefault();
     store.remove();
   } else if (k === "?") help.value = true;
@@ -271,12 +284,13 @@ function unload(e: BeforeUnloadEvent) {
 }
 onMounted(async () => {
   await configureApi();
+  await store.refreshModels();
   jobsTimer = setInterval(() => void refreshJobs(), 1000);
   try {
     await store.refresh();
     if (store.images[0]) await store.load(store.images[0]);
-  } catch {
-    /* no project yet */
+  } catch (e) {
+    store.error = String(e);
   }
   window.addEventListener("keydown", key);
   window.addEventListener("beforeunload", unload);
@@ -291,7 +305,13 @@ onBeforeUnmount(() => {
   <NConfigProvider
     ><div class="app" :inert="store.navigating">
       <header>
-        <strong class="brand">AnnoDesk</strong
+        <strong class="brand"
+          ><img
+            src="/annodesk.svg"
+            alt=""
+            width="28"
+            height="28"
+          />AnnoDesk</strong
         ><button
           @click="
             path = store.meta?.root ?? '';
@@ -303,16 +323,35 @@ onBeforeUnmount(() => {
             store.meta ? store.meta.root.split("/").at(-1) : "Open project…"
           }}</button
         ><span class="grow"></span
-        ><button @click="classesOpen = true">Classes</button
-        ><button @click="tagsOpen = true">Tags</button
+        ><button
+          title="Manage project class names, colors and IDs. Use the palette to assign annotations."
+          @click="classesOpen = true"
+        >
+          Manage classes</button
+        ><button
+          title="Manage project tag names and colors"
+          @click="tagsOpen = true"
+        >
+          Tags</button
         ><button
           class="primary"
+          title="Segment existing boxes without a mask in the current image"
           :disabled="!store.meta"
           @click="store.segment(true)"
         >
           Segment current</button
-        ><button :disabled="!store.meta" @click="startBatch">Batch…</button
-        ><button :disabled="!store.meta" @click="exportCurrent">Export</button
+        ><button
+          title="Segment existing boxes across the dataset"
+          :disabled="!store.meta"
+          @click="startBatch"
+        >
+          Batch…</button
+        ><button
+          title="Export reviewed annotations for the current task"
+          :disabled="!store.meta"
+          @click="exportCurrent"
+        >
+          Export</button
         ><button title="Keyboard shortcuts · ?" @click="help = true">
           Shortcuts ?
         </button>
@@ -359,15 +398,33 @@ onBeforeUnmount(() => {
             @click="store.tool = id"
           >
             <Icon :name="id" /></button
-          ><button title="Undo · Ctrl/⌘ Z" @click="store.undo()">↶</button>
+          ><button title="Undo · Ctrl+Z or ⌘Z" @click="store.undo()">↶</button>
         </nav>
         <section class="center">
           <div class="canvasbar">
-            <select v-model="store.model" title="Segmentation model">
-              <option>sam2.1_s.pt</option>
-              <option>mobile_sam.pt</option>
-              <option>sam3.pt</option></select
-            ><label title="Only boxes without a mask are processed"
+            <select
+              v-model="store.model"
+              aria-label="Segmentation model"
+              :title="
+                store.models?.models.find((m) => m.id === store.model)?.error ||
+                'Local segmentation model. No automatic downloads.'
+              "
+            >
+              <option
+                v-for="m in store.models?.models ?? []"
+                :key="m.id"
+                :value="m.id"
+              >
+                {{ m.name }}{{ m.available ? "" : " (missing)" }}
+              </option>
+            </select>
+            <button
+              title="Reload models.json and check local model files"
+              @click="store.refreshModels()"
+            >
+              Reload
+            </button>
+            <label title="Only boxes without a mask are processed"
               ><input type="checkbox" v-model="store.autoSegment" />
               Auto-segment</label
             ><span class="grow"></span
@@ -447,12 +504,7 @@ onBeforeUnmount(() => {
               <h3>Image review</h3>
               <div class="review">
                 <button
-                  v-for="[value, label] in [
-                    ['pending', 'Not reviewed'],
-                    ['ok', 'Approved'],
-                    ['uncertain', 'Needs review'],
-                    ['excluded', 'Excluded'],
-                  ]"
+                  v-for="{ value, label } in reviewStates"
                   :class="{
                     active:
                       value === 'excluded'
@@ -526,7 +578,16 @@ onBeforeUnmount(() => {
                   {{ object.polygons.length ? "Mask" : "" }}</small
                 ></button
               ><template v-if="store.object"
-                ><select
+                ><button
+                  title="Search and assign a class · C"
+                  :disabled="store.object.locked"
+                  @click="store.openClassPicker()"
+                >
+                  Change class <kbd>C</kbd>
+                </button>
+                <select
+                  :disabled="store.object.locked"
+                  title="Assign a class to the selected annotation"
                   v-model="store.object.class_id"
                   @change="store.changed(true)"
                 >
@@ -562,7 +623,11 @@ onBeforeUnmount(() => {
                   >
                 </div>
                 <div class="row">
-                  <button @click="store.remove()">Delete object</button
+                  <button
+                    title="Delete selected annotation · X or Delete"
+                    @click="store.remove()"
+                  >
+                    Delete object</button
                   ><button @click="store.segment()">Refine mask</button>
                 </div></template
               >
@@ -575,7 +640,8 @@ onBeforeUnmount(() => {
       </main>
       <footer>
         <span>{{ store.tool }}</span
-        ><span>A / D: previous / next image</span><span class="grow"></span
+        ><span>A / D or ← / →: previous / next image</span
+        ><span class="grow"></span
         ><span :class="{ warning: store.dirty }">{{
           store.saving ? "Saving…" : store.dirty ? "Unsaved changes" : "Saved"
         }}</span>
@@ -643,14 +709,41 @@ onBeforeUnmount(() => {
         ></NDrawer
       >
       <NDrawer v-model:show="tagsOpen" :width="390"
-        ><NDrawerContent title="Project tags" closable
-          ><div v-for="c in store.meta?.tags" class="category-editor">
-            <input type="color" v-model="c.color" @change="update(c)" /><input
-              v-model="c.name"
-              @change="update(c)"
-            />
-          </div>
-          <p>New tags are registered when added to an image.</p></NDrawerContent
+        ><NDrawerContent title="Project tags" closable>
+          <section class="tag-group" aria-labelledby="builtin-states-heading">
+            <div class="row">
+              <h3 id="builtin-states-heading">Built-in review states</h3>
+              <span class="readonly-label">Read only</span>
+            </div>
+            <p class="muted">
+              Review is tracked per task. Excluded applies to the whole image.
+            </p>
+            <ul class="builtin-states">
+              <li v-for="state in reviewStates" :key="state.value">
+                <i :style="{ background: state.color }" aria-hidden="true"></i>
+                <div>
+                  <strong>{{ state.label }}</strong>
+                  <p class="muted">{{ state.description }}</p>
+                </div>
+              </li>
+            </ul>
+          </section>
+          <section class="tag-group" aria-labelledby="custom-tags-heading">
+            <h3 id="custom-tags-heading">Custom image tags</h3>
+            <p v-if="!store.meta?.tags.length" class="muted">
+              No custom tags yet.
+            </p>
+            <div v-for="c in store.meta?.tags" class="category-editor">
+              <input type="color" v-model="c.color" @change="update(c)" /><input
+                v-model="c.name"
+                @change="update(c)"
+              />
+            </div>
+            <p class="muted">
+              New tags are registered when added to an image. Their names and
+              colors are editable here.
+            </p>
+          </section></NDrawerContent
         ></NDrawer
       >
       <NDrawer v-model:show="help" :width="420"
@@ -668,6 +761,7 @@ onBeforeUnmount(() => {
           <p>Single-key shortcuts are disabled while typing.</p></NDrawerContent
         ></NDrawer
       >
-    </div></NConfigProvider
-  >
+      <ClassPicker />
+      <FastTooltip /></div
+  ></NConfigProvider>
 </template>

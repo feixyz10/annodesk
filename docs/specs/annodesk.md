@@ -58,7 +58,7 @@ data.yaml 可缺失。扫描已有类别数字 ID 时生成 class_N 占位名；
 - SAM 3 文本可返回多个实例；先指定类别和提示词，预览后接受。中文类别名称允许；不承诺模型中文提示质量。
 - 删除操作区分仅 box、仅 mask 和整个实例；按当前明确的几何选择执行。无损 mask 保留孔洞和不连通部分，投影多边形不作为唯一数据。
 
-类别面板常驻左下。没有选中实例时，显示 New objects: <class> 并设置新对象默认类别；选中实例时显示 Assign to selected object(s)，点击类别改类。New objects 明确取消选中。多类别支持搜索、最近使用和收藏；未分配类别草稿允许存在，但完成/导出前必须解决。
+类别面板常驻左下。没有选中实例时，显示 Default for new annotations: <class> 并设置新对象默认类别；选中实例时显示 Class for selected object(s)，点击类别改类。Default class 按钮明确取消选中，并以 tooltip 解释它只设置后续标注的类别。多类别支持搜索、最近使用和收藏；未分配类别草稿允许存在，但完成/导出前必须解决。
 
 ## 5. 类别、tag、颜色
 
@@ -116,7 +116,7 @@ Tree 保留 images 下多级子目录，支持逐目录展开/收起、Expand al
 | 通过，有疑问，排除 | 1，2，3 |
 | 类别1..9 | Alt+1..9 |
 | mask/box显示 | M / H |
-| 撤销/重做，保存 | Ctrl/⌘+Z / Ctrl/⌘+Shift+Z，Ctrl/⌘+S |
+| 撤销/重做，保存 | Ctrl+Z or ⌘Z / Ctrl+Shift+Z or ⌘Shift+Z，Ctrl+S or ⌘S |
 | 删除，快捷键帮助 | Delete/Backspace，? |
 
 Tab 保留焦点导航。输入框、IME、浮层不触发画布单键；按钮焦点下 Enter/Space 保留正常行为。主要按钮 hover/键盘聚焦展示动作+按键；重要错误和不可用原因不只藏在 hover。
@@ -142,7 +142,7 @@ Tab 保留焦点导航。输入框、IME、浮层不触发画布单键；按钮�
 
 当前图、全部图、切图自动分割共用任务接口。默认只处理有框且无 mask 的实例，跳过 Excluded，不重算已编辑 mask。无框不自动猜目标/全图分割。交互请求优先，SAM 编码按图像指纹/权重/预处理缓存并有内存预算。
 
-API 使用单 Uvicorn worker；模型由受控后台执行单元持有，推理不阻塞 HTTP。模型下载/加载失败仍允许框标注。模型适配器提供 capabilities、load/unload、encode、segment_visual、segment_text，结果不直接写 UI 状态。
+API 使用单 Uvicorn worker；模型由受控后台执行单元持有，推理不阻塞 HTTP。本地模型加载失败仍允许框标注。模型适配器提供 capabilities、load/unload、encode、segment_visual、segment_text，结果不直接写 UI 状态。
 
 ## 11. YOLO 与训练导出
 
@@ -156,7 +156,7 @@ YOLO 多边形对孔洞/不连通实例可能有损，输出告警及报告；CO
 
 ## 12. CLI、构建与部署
 
-单一 console script 使用 tyro：serve、api、ui、dev、build-ui、doctor、models list/fetch。CLI help 不加载模型；用户配置和模型缓存用 platformdirs，与项目标签分离。
+单一 console script 使用 tyro：serve、api、ui、dev、build-ui、doctor、docs、models list、segment。CLI help 不加载模型；模型配置与项目标签分离，模型只从本地读取，禁止自动下载和推理时自动安装依赖。
 
 ```bash
 uv sync
@@ -174,6 +174,18 @@ API /api/v1，info 返回应用/协议版本和能力；运行时 /ui-config.jso
 
 Hatchling 打包。web_dist 作为 package data 随 wheel/sdist 发布，普通运行者不需 Node。仓库跟踪匹配的预构建资源，干净 clone 后 uv sync 即可打开 UI；前端开发使用 Node/npm lock，build-ui 执行 npm ci、类型检查、构建。uv sync 不隐式安装 Node 或 npm。发布 CI 先重建前端并检查资源版本，再 uv build，并在新环境安装 wheel 验证。安装目录只读或任意 cwd 均正常。
 
+### 12.1 本地模型配置与无界面分割
+
+仓库提供 models.json；命令行 --models-config 优先，其次 ANNODESK_MODELS_CONFIG、当前目录 models.json、仓库默认、wheel 内置默认。JSON 定义 default_model 及 models 数组，每项含 id、name、backend(sam/sam2/mobile_sam/sam3)、source（模型最终一级目录，不配置 checkpoint 文件名）。ID 唯一，默认 ID 必须存在。
+
+source 只填写最终一级模型文件夹，不填写 pt/safetensors 文件，也不提供 checkpoint 字段。展开环境变量和 ~ 后统一两步查找，不识别 repo ID 类型：先相对 JSON 目录 resolve 并检查 is_dir；不是目录则检查 $HF_MODELS/source（HF_MODELS 已设置时）。绝对路径直接检查目录，缺失报错，不剥离根路径后回退。repo ID 与普通相对目录的查找规则相同；本地同名文件不视为目录。
+
+适配器在已选目录内自动查找兼容 .pt 权重，先按 backend 的已知命名匹配；无已知命名时仅接受唯一 .pt。没有兼容权重或多个候选均报错，不根据文件缺失再次换目录。safetensors-only 的 HF 目录暂不被当前 Ultralytics 适配器支持，页面明确显示不可用。配置每个 source 只包含一个模型。禁止 URL 和自动下载；推理禁用库联网/自动安装选项，Python 推理线程审计网络连接和下载/安装进程。辅助资源缺失也直接报错。
+
+GET /api/v1/models 无需打开项目，返回配置条目、默认 ID、本地可用性、解析路径、错误、文本能力；页面模型选择器从此加载，可 Reload 配置及可用性。选择缺失模型时明确报错。GET /api/v1/project 在未打开项目时返回 200 null，避免把正常初始状态记录成 409；依赖项目的实际操作仍可返回 409。
+
+annodesk segment --project /data/dataset --models-config ./models.json --model <id> 同步处理已有 YOLO 框，不启动 UI 或 HTTP 服务。默认模型来自 JSON，跳过已有 mask、锁定对象及 Excluded 图片；逐图保存到 labels_seg 与内部 RLE，保留 detection 框及类别 ID。中断后再次运行跳过已成功结果；失败明细写入 .annodesk/segment-report.json，失败退出码为 1，成功为 0。输出待人工复核，不自动标为 Approved。
+
 ## 13. 验收和分模块实施
 
 以可运行模块依次提交：工程/CLI；领域和YOLO存储；API和保存；Vue工作台；推理适配/任务；类别迁移/清理/导出；集成和发布验证。未完成能力必须在 UI 显式不可用或在 README 说明，禁止用模拟推理假装真实模型。
@@ -187,3 +199,19 @@ Hatchling 打包。web_dist 作为 package data 随 wheel/sdist 发布，普通�
 - 已区分uv依赖、Node构建、权重准备，避免承诺所有模型自动安装或GPU驱动自动配置。
 - 已定义多文件恢复、外部修改、未标注/背景和同stem冲突，不以YOLO txt充当全部编辑数据。
 - Python基准遵循用户现有3.13配置；真实推理兼容性必须实测，基础标注不依赖GPU安装成功。
+
+### 交互细化：赋类、提示和品牌图标
+
+Class palette 为日常赋类入口；顶部 Manage classes 为名称、颜色、ID 管理入口。选中框或 mask 后可直接点左侧类别，或按 C 打开带搜索的类别选择器，以 ↑↓ 选择、Enter 确认、Esc 取消。画布选择模式下双击实例也可打开；右侧提供 Change class 按钮。赋类沿用自动保存/撤销，不修改几何，锁定实例不可赋类。1/2/3 仍用于图片审核状态，不与类别快捷键混用。
+
+全局提示约 150ms 后显示，适用于 pointer hover 及键盘 focus，替代浏览器无法控制延迟的 title 提示。提示展示作用及已有快捷键，离开、点击、滚动、Esc 时关闭；窗口边缘自动调整位置。图标采用同一份 SVG：蓝色标注框与白色 mask 轮廓，复用为 favicon 与左上角品牌标识。
+
+Tags 抽屉顶部始终展示四个内置审核状态及固定颜色/含义（Not reviewed、Approved、Needs review、Excluded），标注 Read only，不提供改名、改色或删除控件。下方独立 Custom image tags 分组管理自定义标签；内置项不写入可编辑 tags 字典。审核前三项按任务记录，Excluded 仍为整图标记，二者语义不变。
+
+快捷键补充：X 或 Delete 删除当前选中标注；←/→ 与 A/D 均可前后切图。沿用输入框、IME、弹层与锁定实例的快捷键保护，帮助抽屉、删除按钮提示与状态栏保持同步。
+
+快捷键文案约定：同一功能的替代操作使用 or（例如 X or Delete、C or double-click），不同功能依次对应的按键使用 /（例如 Previous / next image 对应 A / D or ← / →）。撤销与重做分行展示，避免组合键歧义。
+
+面向安装包用户的操作说明保存于 docs/user-guide.md，与开发者 README 分离。该指南作为 package long description 并以 annodesk/docs/user-guide.md 资源随 wheel 发布，sdist 同时包含源文档；annodesk docs 输出当前安装版本指南，--output 导出 Markdown 且拒绝覆盖已有文件。
+
+入口 HTML（含 /index.html）与状态 JSON 使用 Cache-Control: no-store；HTML 不使用旧 ETag/Last-Modified 条件请求返回 304，以免升级后仍引用已移除的 hash 静态资源。客户端配置和 API fetch 同样显式 no-store。未打开项目时仍由前端空状态分支停止拉取图片列表，不将 409 改为空数据掩盖错误。

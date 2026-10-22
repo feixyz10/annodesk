@@ -1,6 +1,6 @@
 export let apiBase = "/api/v1";
 export async function configureApi() {
-  const response = await fetch("/ui-config.json");
+  const response = await fetch("/ui-config.json", { cache: "no-store" });
   if (response.ok) apiBase = (await response.json()).apiBase;
   apiBase = localStorage.getItem("annodesk-api") || apiBase;
 }
@@ -10,6 +10,7 @@ export async function request<T>(
   body?: unknown,
 ): Promise<T> {
   const response = await fetch(apiBase + path, {
+    cache: "no-store",
     method,
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -89,4 +90,19 @@ export function instance(
     locked: false,
     source: "manual",
   };
+}
+
+export interface ModelOption {
+  id: string;
+  name: string;
+  backend: string;
+  available: boolean;
+  path: string | null;
+  error: string | null;
+  text_prompts: boolean;
+}
+export interface ModelsConfig {
+  config: string;
+  default_model: string;
+  models: ModelOption[];
 }
