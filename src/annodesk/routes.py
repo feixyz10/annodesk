@@ -13,11 +13,14 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from annodesk.domain import Annotation
+from annodesk.events import EventLog
 from annodesk.inference import SegmentationService, SegmentRequest, UltralyticsAdapter
 from annodesk.jobs import BatchJobs
+from annodesk.lease import ProjectLease
 from annodesk.lifecycle import export_project, reindex_classes, restore_trash, trash_excluded
 from annodesk.masks import decode_mask
 from annodesk.models import ModelRegistry
+from annodesk.statistics import StatisticsIndex
 from annodesk.storage import Project
 
 
@@ -40,9 +43,18 @@ class CategoryInput(BaseModel):
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
 
 
-def project_routes(initial: Path | None = None, models_config: Path | None = None) -> APIRouter:
+def project_routes(
+    initial: Path | None = None, models_config: Path | None = None, events: EventLog | None = None
+) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
-    current = Project(initial) if initial else None
+    events = events or EventLog()
+    lease = ProjectLease(initial) if initial else None
+    try:
+        current = Project(initial) if initial else None
+    except BaseException:
+        if lease:
+            lease.close()
+        raise
     registry = ModelRegistry(models_config)
 
     services = {}
@@ -56,14 +68,14 @@ def project_routes(initial: Path | None = None, models_config: Path | None = Non
                 existing.close()
             batches.pop(item.metadata["id"], None)
             services[item.metadata["id"]] = SegmentationService(
-                item, adapter=UltralyticsAdapter(registry)
+                item, adapter=UltralyticsAdapter(registry, events=events)
             )
         return services[item.metadata["id"]]
 
     def batch():
         item = service()
         if item.project.metadata["id"] not in batches:
-            batches[item.project.metadata["id"]] = BatchJobs(item)
+            batches[item.project.metadata["id"]] = BatchJobs(item, events)
         return batches[item.project.metadata["id"]]
 
     def project() -> Project:
@@ -73,15 +85,35 @@ def project_routes(initial: Path | None = None, models_config: Path | None = Non
 
     @router.post("/project/open")
     def open_project(body: OpenProject):
-        nonlocal current
+        nonlocal current, lease
         if any(s.active for s in services.values()) or any(
             any(j["status"] == "running" for j in b.records.values()) for b in batches.values()
         ):
             raise ValueError(
                 "Wait for inference or cancel the running batch before changing projects"
             )
-        replacement = Project(Path(body.path))
+        if current and current.root == Path(body.path).expanduser().resolve():
+            return get_project()
+        replacement_lease = ProjectLease(Path(body.path))
+        try:
+            replacement = Project(Path(body.path))
+        except BaseException:
+            replacement_lease.close()
+            raise
+        for old in services.values():
+            old.close()
+        services.clear()
+        batches.clear()
+        if lease:
+            lease.close()
+        lease = replacement_lease
         current = replacement
+        events.emit(
+            "INFO",
+            f"Project opened: {current.root}",
+            event_type="project_open",
+            project_id=current.metadata["id"],
+        )
         return {**current.metadata, "root": str(current.root), "image_count": len(current.entries)}
 
     @router.get("/models")
@@ -95,6 +127,14 @@ def project_routes(initial: Path | None = None, models_config: Path | None = Non
             return None
         item = project()
         return {**item.metadata, "root": str(item.root), "image_count": len(item.entries)}
+
+    @router.get("/project/statistics")
+    def statistics(task: Literal["detection", "segmentation"] = "segmentation"):
+        item = project()
+        with item.lock:
+            if item.statistics is None:
+                item.statistics = StatisticsIndex(item)
+        return item.statistics.read(task)
 
     @router.get("/images")
     def images(offset: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=1000)):
@@ -187,6 +227,10 @@ def project_routes(initial: Path | None = None, models_config: Path | None = Non
             "report": json.loads((output / "report.json").read_text()),
         }
 
+    @router.post("/export/jobs")
+    def export_job(body: ExportInput):
+        return batch().export(body.task, body.format, body.include_pending)
+
     @router.post("/trash/excluded")
     def trash():
         return {"operation": trash_excluded(project())}
@@ -243,5 +287,14 @@ def project_routes(initial: Path | None = None, models_config: Path | None = Non
         )
 
     # Keep access local to this application instance rather than a module global.
+    def close():
+        for item in batches.values():
+            item.close()
+        for item in services.values():
+            item.close()
+        if lease:
+            lease.close()
+
+    router.close = close
     router.project = project
     return router

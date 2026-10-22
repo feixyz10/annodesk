@@ -72,6 +72,11 @@ class Project:
         if not self.metadata["classes"]:
             self._import_classes()
         self.write_metadata()
+        self.statistics = None
+
+    def invalidate_statistics(self):
+        if self.statistics is not None:
+            self.statistics.refresh()
 
     def _recover(self):
         operation = self.private / "pending.json"
@@ -280,6 +285,8 @@ class Project:
                     **{self.label_path(image_id, seg): labels[int(seg)] for seg in (False, True)},
                 }
             )
+            if self.statistics is not None:
+                self.statistics.update(image_id, updated)
             return updated
 
     def validate_fingerprints(self, image_id: str):

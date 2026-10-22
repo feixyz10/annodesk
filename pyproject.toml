@@ -1,13 +1,21 @@
 [project]
 name = "annodesk"
-version = "0.1.0"
+version = "0.2.0"
 description = "A local-first image annotation workbench for boxes and masks"
 readme = "docs/user-guide.md"
 requires-python = ">=3.11"
 dependencies = [
-  "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "tyro>=0.9,<2",
-  "pydantic>=2.10,<3", "pillow>=11,<13", "numpy>=2,<3",
-  "pyyaml>=6,<7", "platformdirs>=4,<5", "pycocotools>=2.0.8,<3",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "tyro>=0.9,<2",
+  "pydantic>=2.10,<3",
+  "pillow>=11,<13",
+  "numpy>=2,<3",
+  "pyyaml>=6,<7",
+  "platformdirs>=4,<5",
+  "pycocotools>=2.0.8,<3",
+  "loguru>=0.7,<1",
+  "filelock>=3.16,<4",
 ]
 
 [project.optional-dependencies]
@@ -31,7 +39,7 @@ packages = ["src/annodesk"]
 "docs/user-guide.md" = "annodesk/docs/user-guide.md"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/", "frontend/", "tests/", "docs/specs/", "docs/user-guide.md", "pyproject.toml", "README.md", "uv.lock", "models.json"]
+include = ["src/", "frontend/", "tests/", "docs/specs/", "docs/user-guide.md", "pyproject.toml", "README.md", "AGENTS.md", "uv.lock", "models.json"]
 exclude = ["frontend/node_modules"]
 
 [tool.ruff]

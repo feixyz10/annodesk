@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from "vue";
+import { onMounted, onBeforeUnmount, ref, computed, watch } from "vue";
 import {
   NConfigProvider,
   NDrawer,
@@ -16,6 +16,10 @@ import FilmStrip from "./components/FilmStrip.vue";
 import Icon from "./components/Icon.vue";
 import FastTooltip from "./components/FastTooltip.vue";
 import ClassPicker from "./components/ClassPicker.vue";
+import StatisticsBar from "./components/StatisticsBar.vue";
+import LogDrawer from "./components/LogDrawer.vue";
+import TaskDrawer from "./components/TaskDrawer.vue";
+import { type Job, isPreparing } from "./tasks";
 import { reviewStates } from "./review";
 const store = useProject(),
   canvas = ref<InstanceType<typeof AnnotationCanvas>>(),
@@ -53,7 +57,6 @@ const tools = [
   ["negative", "Negative point", "E"],
   ["promptbox", "Box prompt: mask only", "B"],
   ["text", "Text prompt (SAM 3)", "T"],
-  ["pan", "Pan", "Space"],
 ];
 async function openProject() {
   await store.open(path.value);
@@ -151,6 +154,9 @@ function key(e: KeyboardEvent) {
     classesOpen.value ||
     tagsOpen.value ||
     help.value ||
+    jobsOpen.value ||
+    logsOpen.value ||
+    batchSettings.value ||
     store.classPickerOpen
   )
     return;
@@ -213,10 +219,9 @@ function key(e: KeyboardEvent) {
 async function exportCurrent() {
   try {
     await store.save();
-    const r = await request<{ path: string }>("/export", "POST", {
-      task: store.task,
-    });
-    store.error = "Export saved on backend: " + r.path;
+    await request("/export/jobs", "POST", { task: store.task });
+    jobsOpen.value = true;
+    await refreshJobs();
   } catch (e) {
     store.error = String(e);
   }
@@ -232,21 +237,47 @@ async function reindex() {
   }
 }
 const jobsOpen = ref(false),
-  jobs = ref<
-    Array<{
-      id: string;
-      status: string;
-      completed: number;
-      skipped: number;
-      total: number;
-      failed: Array<{ image: string; error: string }>;
-    }>
-  >([]);
+  logsOpen = ref(false),
+  batchSettings = ref(false),
+  deviceType = ref("auto"),
+  devices = ref("auto"),
+  numWorkers = ref("auto"),
+  jobs = ref<Job[]>([]);
+const taskNotice = ref("");
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+const lastJob = computed(() => jobs.value.at(-1));
+const activeJob = computed(() =>
+  jobs.value.find((j) => j.status === "running"),
+);
+let jobsGeneration = 0;
+watch(
+  () => store.meta?.id,
+  () => {
+    jobsGeneration++;
+    jobs.value = [];
+    taskNotice.value = "";
+    void refreshJobs();
+  },
+);
 let jobsTimer: ReturnType<typeof setInterval>;
 async function refreshJobs() {
-  if (!jobsOpen.value || !store.meta) return;
+  if (!store.meta || document.hidden) return;
+  const token = ++jobsGeneration,
+    project = store.meta.id;
   try {
-    jobs.value = await request("/jobs");
+    const result = await request<Job[]>("/jobs");
+    if (token === jobsGeneration && project === store.meta?.id) {
+      const previous = jobs.value.find((j) => j.status === "running");
+      jobs.value = result;
+      const finished =
+        previous &&
+        result.find((j) => j.id === previous.id && j.status !== "running");
+      if (finished) {
+        taskNotice.value = `${finished.kind === "export" ? "Export" : "Batch"} ${finished.status} · ${finished.failed.length} failed`;
+        if (noticeTimer) clearTimeout(noticeTimer);
+        noticeTimer = setTimeout(() => (taskNotice.value = ""), 6000);
+      }
+    }
   } catch (e) {
     store.error = String(e);
   }
@@ -254,7 +285,13 @@ async function refreshJobs() {
 async function startBatch() {
   try {
     await store.save();
-    await request("/jobs", "POST", { model: store.model });
+    await request("/jobs", "POST", {
+      model: store.model,
+      device_type: deviceType.value,
+      devices: devices.value,
+      num_workers: numWorkers.value,
+    });
+    batchSettings.value = false;
     jobsOpen.value = true;
     await refreshJobs();
   } catch (e) {
@@ -297,6 +334,7 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => {
   clearInterval(jobsTimer);
+  if (noticeTimer) clearTimeout(noticeTimer);
   window.removeEventListener("keydown", key);
   window.removeEventListener("beforeunload", unload);
 });
@@ -305,57 +343,118 @@ onBeforeUnmount(() => {
   <NConfigProvider
     ><div class="app" :inert="store.navigating">
       <header>
-        <strong class="brand"
-          ><img
-            src="/annodesk.svg"
-            alt=""
-            width="28"
-            height="28"
-          />AnnoDesk</strong
-        ><button
-          @click="
-            path = store.meta?.root ?? '';
-            openDialog = true;
-          "
-          title="Open a dataset or image folder on the backend"
+        <div
+          class="header-cluster project-cluster"
+          aria-label="Project management"
         >
-          {{
-            store.meta ? store.meta.root.split("/").at(-1) : "Open project…"
-          }}</button
-        ><span class="grow"></span
-        ><button
-          title="Manage project class names, colors and IDs. Use the palette to assign annotations."
-          @click="classesOpen = true"
+          <strong class="brand"
+            ><img
+              src="/annodesk.svg"
+              alt=""
+              width="28"
+              height="28"
+            />AnnoDesk</strong
+          >
+          <button
+            @click="
+              path = store.meta?.root ?? '';
+              openDialog = true;
+            "
+            title="Open a dataset or image folder on the backend"
+          >
+            {{
+              store.meta ? store.meta.root.split("/").at(-1) : "Open project…"
+            }}
+          </button>
+          <button
+            title="Manage project class names, colors and IDs. Use the palette to assign annotations."
+            @click="classesOpen = true"
+          >
+            Classes
+          </button>
+          <button
+            title="Manage project tag names and colors"
+            @click="tagsOpen = true"
+          >
+            Tags
+          </button>
+        </div>
+        <div
+          class="header-cluster processing-cluster"
+          aria-label="Dataset operations"
         >
-          Manage classes</button
-        ><button
-          title="Manage project tag names and colors"
-          @click="tagsOpen = true"
+          <button
+            title="Segment existing boxes across the dataset"
+            :disabled="!store.meta"
+            @click="batchSettings = true"
+          >
+            Batch…
+          </button>
+          <button
+            title="Export reviewed annotations for the current task"
+            :disabled="!store.meta"
+            @click="exportCurrent"
+          >
+            Export
+          </button>
+        </div>
+        <span class="grow" />
+        <div
+          class="header-cluster diagnostics-cluster"
+          aria-label="Tasks and diagnostics"
         >
-          Tags</button
-        ><button
-          class="primary"
-          title="Segment existing boxes without a mask in the current image"
-          :disabled="!store.meta"
-          @click="store.segment(true)"
+          <button
+            class="task-button"
+            @click="jobsOpen = true"
+            :disabled="!store.meta"
+            title="Batch segmentation and export progress; closing the drawer keeps tasks running"
+          >
+            <span v-if="activeJob" class="task-spinner" aria-hidden="true" />
+            Tasks<span v-if="activeJob">
+              · {{ activeJob.completed }}/{{ activeJob.total }}</span
+            >
+            <span
+              v-else-if="lastJob?.failed.length || lastJob?.status === 'failed'"
+              class="task-error-badge"
+              >{{ lastJob?.failed.length || "!" }}</span
+            >
+            <progress
+              v-if="activeJob"
+              class="task-button-progress"
+              :value="isPreparing(activeJob) ? undefined : activeJob.completed"
+              :max="Math.max(1, activeJob.total)"
+              :aria-label="activeJob.phase || 'Task progress'"
+            />
+          </button>
+          <button
+            @click="logsOpen = true"
+            title="Important model, device, worker and error events"
+          >
+            Logs
+          </button>
+        </div>
+        <button
+          class="help-button"
+          title="Keyboard shortcuts · ?"
+          aria-label="Shortcuts"
+          @click="help = true"
         >
-          Segment current</button
-        ><button
-          title="Segment existing boxes across the dataset"
-          :disabled="!store.meta"
-          @click="startBatch"
-        >
-          Batch…</button
-        ><button
-          title="Export reviewed annotations for the current task"
-          :disabled="!store.meta"
-          @click="exportCurrent"
-        >
-          Export</button
-        ><button title="Keyboard shortcuts · ?" @click="help = true">
-          Shortcuts ?
+          <Icon name="help" />
         </button>
       </header>
+      <StatisticsBar :active="!!activeJob" />
+      <div v-if="taskNotice" class="task-notice" role="status">
+        {{ taskNotice }}
+        <button
+          @click="
+            jobsOpen = true;
+            taskNotice = '';
+          "
+        >
+          Details
+        </button>
+      </div>
+      <LogDrawer v-model:show="logsOpen" />
       <div v-if="store.error" class="alert" role="alert">
         {{ store.error }}<button @click="store.error = ''">Dismiss</button
         ><button v-if="store.dirty" @click="store.save().catch(() => {})">
@@ -406,8 +505,10 @@ onBeforeUnmount(() => {
               v-model="store.model"
               aria-label="Segmentation model"
               :title="
-                store.models?.models.find((m) => m.id === store.model)?.error ||
-                'Local segmentation model. No automatic downloads.'
+                store.models?.models.find((m) => m.id === store.model)
+                  ?.available === false
+                  ? 'Model unavailable. Check your model configuration or select another model.'
+                  : 'Choose a local segmentation model. No automatic downloads.'
               "
             >
               <option
@@ -424,31 +525,54 @@ onBeforeUnmount(() => {
             >
               Reload
             </button>
+            <button
+              class="primary"
+              title="Segment existing boxes without a mask in the current image"
+              :disabled="!store.meta"
+              @click="store.segment(true)"
+            >
+              Segment current
+            </button>
             <label title="Only boxes without a mask are processed"
               ><input type="checkbox" v-model="store.autoSegment" />
               Auto-segment</label
-            ><span class="grow"></span
-            ><button
-              aria-label="Zoom out"
-              title="Zoom out · -"
-              @click="canvas?.zoom(0.8)"
+            ><span class="grow"></span>
+            <div
+              class="view-tools"
+              role="toolbar"
+              aria-label="Image view controls"
             >
-              <Icon name="minus" /></button
-            ><span class="zoom"
-              >{{ Math.round((canvas?.ratio ?? 1) * 100) }}%</span
-            ><button
-              aria-label="Zoom in"
-              title="Zoom in · +"
-              @click="canvas?.zoom(1.25)"
-            >
-              <Icon name="plus" /></button
-            ><button
-              aria-label="Fit image"
-              title="Fit image · F"
-              @click="canvas?.fit()"
-            >
-              <Icon name="fit" />
-            </button>
+              <button
+                aria-label="Pan"
+                title="Pan · hold Space for temporary pan"
+                :class="{ active: store.tool === 'pan' }"
+                :aria-pressed="store.tool === 'pan'"
+                @click="store.tool = store.tool === 'pan' ? 'select' : 'pan'"
+              >
+                <Icon name="pan" />
+              </button>
+              <button
+                aria-label="Zoom out"
+                title="Zoom out · -"
+                @click="canvas?.zoom(0.8)"
+              >
+                <Icon name="minus" /></button
+              ><span class="zoom"
+                >{{ Math.round((canvas?.ratio ?? 1) * 100) }}%</span
+              ><button
+                aria-label="Zoom in"
+                title="Zoom in · +"
+                @click="canvas?.zoom(1.25)"
+              >
+                <Icon name="plus" /></button
+              ><button
+                aria-label="Fit image"
+                title="Fit image · F"
+                @click="canvas?.fit()"
+              >
+                <Icon name="fit" />
+              </button>
+            </div>
           </div>
           <div v-if="store.tool === 'text'" class="textbar">
             <input
@@ -664,34 +788,55 @@ onBeforeUnmount(() => {
           <NButton type="primary" @click="openProject">Open</NButton>
         </div></NModal
       >
-      <NDrawer v-model:show="jobsOpen" :width="440"
-        ><NDrawerContent title="Batch segmentation" closable
-          ><p>Completed images remain saved if this page disconnects.</p>
-          <section v-for="job in jobs" :key="job.id" class="section">
-            <strong>{{ job.status }}</strong>
-            <p>
-              {{ job.completed }} / {{ job.total }} processed ·
-              {{ job.skipped }} skipped · {{ job.failed.length }} failed
-            </p>
-            <progress
-              :value="job.completed"
-              :max="job.total"
-              style="width: 100%"
-            ></progress
-            ><button v-if="job.status === 'running'" @click="jobAction(job.id)">
-              Cancel after current image</button
-            ><button
-              v-else-if="job.status !== 'complete'"
-              @click="jobAction(job.id, true)"
-            >
-              Resume
-            </button>
-            <p v-for="failure in job.failed.slice(-3)" class="muted">
-              {{ failure.error }}
-            </p>
-          </section></NDrawerContent
-        ></NDrawer
+      <NModal
+        v-model:show="batchSettings"
+        preset="card"
+        title="Batch segmentation"
+        style="width: 440px; max-width: 95vw"
       >
+        <p>
+          Process missing masks from existing boxes. Existing masks, locked
+          objects and excluded images are skipped.
+        </p>
+        <label
+          >Device type
+          <select v-model="deviceType">
+            <option v-for="device in ['auto', 'cuda', 'cpu', 'mps']">
+              {{ device }}
+            </option>
+          </select></label
+        >
+        <label
+          >Logical CUDA devices
+          <input
+            v-model="devices"
+            placeholder="auto or 0,1"
+            title="Indices after CUDA_VISIBLE_DEVICES filtering; CPU/MPS require auto"
+        /></label>
+        <label
+          >Workers
+          <input
+            v-model="numWorkers"
+            placeholder="auto or positive integer"
+            title="Auto: one worker per selected CUDA device, otherwise one"
+        /></label>
+        <p class="muted">
+          Each worker loads a model copy. Multiple workers on one GPU require
+          more memory.
+        </p>
+        <button class="primary" @click="startBatch">Start batch</button>
+      </NModal>
+      <TaskDrawer
+        v-model:show="jobsOpen"
+        :jobs="jobs"
+        :images="store.images"
+        @cancel="jobAction($event)"
+        @resume="jobAction($event, true)"
+        @logs="
+          jobsOpen = false;
+          logsOpen = true;
+        "
+      />
       <NDrawer v-model:show="classesOpen" :width="390"
         ><NDrawerContent title="Project classes" closable
           ><p>

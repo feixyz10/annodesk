@@ -2,6 +2,8 @@
 
 AnnoDesk 用于标注图像中的检测框和实例分割 mask，可导入已有 YOLO 检测标签，再根据框生成分割结果并人工复核。界面为英文、浅色主题，在浏览器中使用；图片、模型和标注数据保存在运行后端的电脑上。
 
+本指南对应 0.2.0。
+
 本指南面向安装 wheel 的使用者，不需要源码仓库、Node.js 或前端构建工具。
 
 ## 1. 安装
@@ -27,13 +29,13 @@ Windows PowerShell 激活环境：
 安装拿到的 wheel；文件名中的版本号以实际发布文件为准：
 
 ```sh
-python -m pip install ./annodesk-0.1.0-py3-none-any.whl
+python -m pip install ./annodesk-0.2.0-py3-none-any.whl
 ```
 
 基础安装即可使用框标注、类别、审核状态和数据管理。若需要 SAM 推理，显式安装可选依赖：
 
 ```sh
-python -m pip install "./annodesk-0.1.0-py3-none-any.whl[inference]"
+python -m pip install "./annodesk-0.2.0-py3-none-any.whl[inference]"
 annodesk doctor
 ```
 
@@ -61,7 +63,7 @@ annodesk serve
 annodesk serve --port 8766
 ```
 
-同一数据集目前请只运行一个后端进程，避免多处同时修改。
+同一数据集只允许一个 AnnoDesk 写入进程。后端打开项目期间持有跨进程写锁，独立 `segment` 命令不能同时写同一项目；先关闭项目服务。异常退出后系统会释放锁，不需要删除 lock 文件。不要在多个 Uvicorn worker 中运行同一项目。
 
 ## 3. 准备数据集
 
@@ -162,7 +164,7 @@ annodesk serve --project /data/my-dataset --models-config ./models.json
 
 配置查找优先级：`--models-config` > `ANNODESK_MODELS_CONFIG` 环境变量 > 当前目录 `models.json` > 源码仓库默认（若存在）> 安装包内置默认。
 
-建议始终显式传入自己的配置文件。页面顶部选择模型，修改 JSON 或放好模型后点击 **Reload**；`(missing)` 表示目录或兼容权重未就绪，指向提示可查看原因。模型目录存在不代表推理依赖已经全部安装。
+建议始终显式传入自己的配置文件。页面顶部选择模型，修改 JSON 或放好模型后点击 **Reload**；`(missing)` 表示目录或兼容权重未就绪，悬停只显示简短状态，不展示服务端路径或原始错误；详细目录检查结果使用 `annodesk models list --models-config ./models.json` 查看。模型目录存在不代表推理依赖已经全部安装。
 
 ## 5. 在页面中标注
 
@@ -177,20 +179,24 @@ annodesk serve --project /data/my-dataset --models-config ./models.json
 - 选中框或 mask 后，点击类别直接修改该实例。
 - 按 **C** 打开类别搜索，↑↓ 选择、Enter 确认、Esc 取消；选择模式下双击实例也可打开。
 
-顶部 **Manage classes** 用于增加类别、修改名称和颜色。类别 ID 平时保持稳定；**Reindex IDs…** 会修改整个项目的类别映射和标签文件，使用前备份项目。
+顶部 **Classes** 用于增加类别、修改名称和颜色。类别 ID 平时保持稳定；**Reindex IDs…** 会修改整个项目的类别映射和标签文件，使用前备份项目。
 
 ### 画框和生成 mask
 
 1. 在 Class palette 中选择类别。
 2. 使用 **Draw box** 拖出检测框，切回 **Select** 后可移动和拖动控制点调整；右侧也可编辑坐标。
 3. 选中框后按 Enter，或点击 **Refine mask**，使用当前模型生成 mask。
-4. **Segment current** 处理当前图片中尚无 mask 的未锁定检测框。
+4. 模型选择旁的 **Segment current** 处理当前图片中尚无 mask 的未锁定检测框。
 
 仅需要 mask、不希望保存检测框时，使用 **Box prompt: mask only**，或用正负点建立提示，再执行分割。框提示与显式检测框分开保存。正点用于包含区域，负点用于排除区域。文本提示工具只适用于支持文本提示的 SAM 3 模型，需先设置默认类别。
 
-开启 **Auto-segment** 后，切换到含待处理检测框的图片会自动发起分割。**Batch…** 可对整个项目的已有框进行批量处理，在任务抽屉查看进度、错误和取消/继续操作。取消在当前图片完成后生效，继续只处理未处理图片；失败图片可在问题解决后重新发起批次。
+开启 **Auto-segment** 后，切换到含待处理检测框的图片会自动发起分割。**Batch…** 对整个项目的已有框进行批量处理，可设置 Device type、逻辑 CUDA devices 和 Workers（规则同第6节）。开始后关闭配置窗，自动打开右侧 **Tasks** 抽屉（默认600px，可拖动，窄屏最大占满窗口）。抽屉展开显示开始时间、耗时、完整蓝色进度条、成功/失败/跳过/剩余数量、只读执行配置与 worker 表。扫描、加载模型时显示不定进度动画，不伪造百分比。
 
-选中实例可在右侧删除、锁定或隐藏。锁定后先解锁才能改类；隐藏只影响显示，不等于从导出中移除。画布支持滚轮局部缩放、平移和 **Fit image**。
+关闭抽屉只折叠界面，顶部保留 `Tasks ◌ 60/75` 和细进度线，可随时重新打开；不占用额外画布空间。抽屉展示 worker 当前图片和耗时、失败原因、取消/继续及 View logs 操作，历史任务默认折叠。取消停止新任务派发，当前在途图片完成保存后生效。恢复同一任务保留原快照、模型/设备计划和计数，只处理 remaining；失败图片在修复原因后另建批次重试。任务结束时短暂提示结果；存在错误时 Tasks 保留错误标记，不会自动抢焦点。断开浏览器不会取消后台任务。
+
+进度的 `finished = succeeded + failed`，分母排除跳过项；成功只在标注保存后计数。例如 `60/75 finished · 58 succeeded · 2 failed · 25 skipped` 仍有15张未处理。启动失败只报告一次任务错误，不把整个数据集伪装成逐图失败。
+
+选中实例可在右侧删除、锁定或隐藏。锁定后先解锁才能改类；隐藏只影响显示，不等于从导出中移除。画布支持滚轮局部缩放；右上角集中放置 **Pan**、缩放与 **Fit image**，平移不放在左侧标注工具栏。Pan按钮可切换，按住Space也可临时平移。
 
 ### 保存、复核与标签
 
@@ -207,6 +213,8 @@ annodesk serve --project /data/my-dataset --models-config ./models.json
 
 Detection 与 segmentation 的前三个审核状态分别记录；Excluded 作用于整张图片，可再次点击取消。编辑标注后可能恢复为未审核，需要重新确认。
 
+顶部常驻统计栏按当前 detection / segmentation 任务汇总全项目，不受左侧搜索影响。`Reviewed = Approved + Needs review + Excluded`；四类数量互斥，相加等于总图片数。Excluded 优先，取消排除后恢复原审核状态。自动生成 mask 不增加 Reviewed。统计以成功保存的状态为准；首次构建显示 Loading statistics，空项目显示 No images。`.annodesk/statistics.sqlite3` 是可重建缓存，不是标注真值。
+
 图片可添加自定义 tags（逗号分隔）和 notes。顶部 **Tags** 抽屉展示只读的四个内置审核状态，下方管理自定义 tag 名称和颜色。当前自定义 tag 改名不会批量迁移旧图片上的 tag 字符串，需自行核对。
 
 ### 导出
@@ -215,7 +223,7 @@ Detection 与 segmentation 的前三个审核状态分别记录；Excluded 作�
 
 默认跳过未审核、Needs review、Excluded 和含未分配类别实例的图片；无对象图片需明确勾选 **Confirm no objects for this task** 并复核通过，才能作为空标签样本导出。
 
-结果位于后端项目的 `.annodesk/exports/<id>/`，页面返回路径。导出目录包含复制的图片、标准 `labels/`、类别配置及报告；分割工作目录中的 `labels_seg/` 在导出副本中转换为标准 `labels/`。导出类别 ID 可能连续重排，工作项目不受影响。
+导出同样自动打开 Tasks 抽屉，收起后由顶部轻量入口显示进度，按已检查图片数推进，最终写报告阶段显示动画。取消后删除本次不完整导出。完成后结果位于后端项目的 `.annodesk/exports/<id>/`，Tasks 显示路径；当前导出为目录，不额外压缩成归档。导出目录包含复制的图片、标准 `labels/`、类别配置及报告；分割工作目录中的 `labels_seg/` 在导出副本中转换为标准 `labels/`。导出类别 ID 可能连续重排，工作项目不受影响。
 
 YOLO polygon 对孔洞等结构可能有损，请保留原始项目及内部 RLE。当前界面还没有 COCO 导出选项和回收站管理界面。
 
@@ -230,14 +238,35 @@ annodesk segment --project /data/my-dataset --models-config ./models.json --mode
 - 保留 detection 框及类别，分割写入 `labels_seg/`，内部保存无损 RLE。
 - 跳过已有 mask、锁定实例和 Excluded 图片。
 - 每张图片独立保存；中断后再次运行可跳过已完成结果。
-- 控制台输出处理进度，错误报告位于 `.annodesk/segment-report.json`。
-- 成功退出码为 0；有失败图片时为 1。解决原因后可重新运行。
+- 控制台显示任务阶段和汇总；执行计划及逐图结果位于 `.annodesk/segment-report.json`。
+- 第一次 Ctrl+C 停止派发并保存当前在途结果；第二次强制终止。未保存的结果不会算成功。
+- 退出码：0完成且无单图失败；1存在单图失败；2配置/设备/启动失败；130取消/中断。
 
 生成结果仍需在页面人工复核，命令不会自动标为 Approved。
 
+### 设备与 worker
+
+```sh
+CUDA_VISIBLE_DEVICES=2,5 annodesk segment --project /data/my-dataset \
+  --models-config ./models.json --model sam2-small \
+  --device-type cuda --devices 0,1 --num-workers 3
+```
+
+`--device-type auto|cuda|cpu|mps` 默认 auto，依次选择 CUDA、MPS、CPU；显式选择不可用硬件会报错，推理失败不自动改用 CPU。`--devices auto` 默认 CUDA 全部可见设备，`0,1` 是经 `CUDA_VISIBLE_DEVICES` 过滤后的逻辑编号，上例对应宿主机2、5。CPU/MPS 只接受 auto。
+
+`--num-workers auto` 默认每个选中 CUDA 设备1个，CPU/MPS为1个；也可填写正整数。3个 worker/2个设备依次分配为 `cuda:0, cuda:1, cuda:0`，每个 worker 常驻一份模型。同一设备多个 worker 会增加显存占用，并不保证更快。少于设备数时只使用前几个设备，日志会提示闲置设备。CPU 有线程预算；MPS 多进程和真实 CUDA 性能仍需在目标机器验证。
+
+### 日志
+
+`serve`、`api`、`ui`、`segment` 为每次运行创建日志，默认 `~/.cache/annodesk/YYYY-MM-DD_HHMMSS_ffffff.log`（包括 macOS）。可通过 `--log-dir /path/to/logs --log-level DEBUG` 修改目录和文件/终端等级，默认 INFO，20MB轮转，保留14天。目录不可写时会警告并继续使用终端与内存日志，不影响标注保存。查询 help/docs/doctor/models 不创建日志文件。
+
+页面 **Logs** 抽屉宽度可拖动，未打开项目也可用。显示时间、等级和重要信息，包含模型、设备、worker READY、任务状态及错误，没有源码文件名/行号和 traceback。选择 Service 或 Current project；等级可切换 `=`（仅该等级）或 `≥`（该等级及以上），包括 SUCCESS。支持暂停/恢复、自动滚动开关、清空视图、复制当前视图和下载当前日志文件。普通轮询、逐框推理和 autosave 不刷屏，同类错误会合并显示，文件和报告保留原始错误。
+
+页面只保留最多1000条，服务环形缓冲2000条，过期缺口会提示。暂停/关闭抽屉不会停止任务或日志写盘。分机部署时文件在后端电脑；单独运行的 CLI 有自己的会话文件，不自动混入另一个后端的实时 Logs。UI-only 进程的日志在其本地文件中查看，页面 Logs 连接的是所配置 API。
+
 ## 7. 快捷键
 
-输入框、类别搜索和 IME 输入期间不会触发工作台单键快捷键。页面 **Shortcuts ?** 可搜索快捷键；按钮提示约 150ms 后显示。
+输入框、类别搜索和 IME 输入期间不会触发工作台单键快捷键。页面右上角 **?（Shortcuts）** 可搜索快捷键；按钮提示约 150ms 后显示。
 
 | 操作 | 按键 |
 | --- | --- |
@@ -286,6 +315,8 @@ annodesk ui --api-url http://gpu-host:8765 --port 8080
 | 提示 No compatible .pt checkpoint | 当前适配器不兼容该目录内容；准备兼容权重，不会自动下载或转换 |
 | Multiple checkpoint candidates | 为每个模型使用独立目录，避免多个候选权重 |
 | 缺少 ultralytics / torch / tokenizer | 在后端环境手动安装对应依赖；运行 `annodesk doctor` 辅助检查 |
+| Project is in use | 关闭占用该项目的另一个 AnnoDesk 服务/CLI；不要删除锁文件强行绕过 |
+| 任务加载失败/显存不足 | 查看 Logs 和 Tasks，减少 workers 或选择更小的模型后新建批次；不会静默换设备 |
 | 保存冲突 | 保留页面和备份，核对是否有其他进程或工具修改同一项目；不要强行覆盖 |
 | 推理完成时已有新编辑 | 页面会保留新编辑并提示需要核对；备份后比较结果，再决定如何重新载入 |
 | 导出结果少于图片数 | 检查当前任务的审核状态、Excluded、未分配类别和空标签确认 |

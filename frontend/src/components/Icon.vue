@@ -1,6 +1,7 @@
 <script setup lang="ts">
 defineProps<{ name: string }>();
 const paths: Record<string, string> = {
+  help: "M9 9A3 3 0 0 1 15 9C15 11 12 11 12 14M12 17V18",
   select: "M5 3 18 12 12 13 9 20Z",
   box: "M4 5H20V19H4Z",
   positive: "M8 12H16M12 8V16",
@@ -17,7 +18,7 @@ const paths: Record<string, string> = {
   <svg viewBox="0 0 24 24" aria-hidden="true">
     <circle v-if="['plus', 'minus'].includes(name)" cx="10" cy="10" r="6" />
     <circle
-      v-if="['positive', 'negative'].includes(name)"
+      v-if="['positive', 'negative', 'help'].includes(name)"
       cx="12"
       cy="12"
       r="8"

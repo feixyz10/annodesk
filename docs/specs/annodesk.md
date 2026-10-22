@@ -1,6 +1,8 @@
 # AnnoDesk 设计规范
 
-版本：1.0 · 2026-10-22。本文合并此前讨论，是实现与验收的唯一设计依据；旧草案与交互原型仅供历史参考。
+版本：1.2 · 2026-10-22。本文合并此前讨论，是实现与验收的唯一设计依据；旧草案与交互原型仅供历史参考。
+
+0.2.0 实现 §10.1 多 worker、§10.2 日志及 §10.3 审核统计与任务抽屉。已发布的0.1.0不包含这些新增能力；实际GPU/SAM权重验证与下文尚未实现的完整产品目标分开记录。
 
 ## 1. 产品目标
 
@@ -11,7 +13,7 @@
 ## 2. 技术与仓库
 
 - 前端：Vue 3、TypeScript、Vite、Pinia、Naive UI。Konva 管理框、提示点与选择；独立 Canvas 显示 mask，使用同一图像坐标变换。
-- 后端：Python、FastAPI、Pydantic、Uvicorn；CLI 使用 tyro，通过类型化配置生成子命令，不自写 argparse，不使用 Typer。
+- 后端：Python、FastAPI、Pydantic、Uvicorn；业务日志采用 Loguru；CLI 使用 tyro，通过类型化配置生成子命令，不自写 argparse，不使用 Typer。
 - 模型：可替换适配器，首批目标为 SAM 2.1、MobileSAM、SAM 3；按能力启用正负点、框、文本。SAM 3 文本与视觉提示分开调用，不假设所有 SAM 衍生模型接口相同。
 - 项目根是一个 uv 项目、一个 Python distribution，名称/import/命令统一为 annodesk。使用 src/annodesk、frontend、tests、docs/specs。
 - uv sync 安装 Python 环境；uv.lock 固定依赖。Python 基准采用当前已配置的 3.13，基础标注服务验证该版本；推理 extras 如不兼容，明确要求另选受支持 Python，而不悄悄更改用户解释器。
@@ -79,7 +81,7 @@ Detection 和 Segmentation 分别记录复核状态，图片另有全局使用�
 | Not reviewed | pending，尚未检查 | 灰 |
 | Approved | ok，人工确认 | 绿 |
 | Needs review | uncertain，有疑问/发现问题 | 琥珀 |
-| Excluded | usability=discard，排除使用 | 低饱和红 |
+| Excluded | excluded=true，排除使用 | 低饱和红 |
 
 Excluded 优先显示但保留原复核状态，不等于删除。blurry、night、occluded 等是自由多选 tag，可新增、改色、备注、筛选、批量设置。
 
@@ -89,7 +91,7 @@ Excluded 优先显示但保留原复核状态，不等于删除。blurry、night
 
 ## 7. 工作台布局
 
-顶部：项目与连接、批处理、导出、Classes/Tags 管理、快捷键帮助。
+顶部以间距和细分隔线分组：左侧项目/Open与Classes/Tags；Batch/Export为处理组；Tasks/Logs为右侧任务诊断组；最右侧为快捷键帮助图标。Tasks按钮预留状态宽度，运行中的数字与旋转标识在按钮内部，不推动邻近按钮。Segment current放在画布模型选择旁边，与Reload/Auto-segment形成当前图片处理操作。顶部工具栏下增加常驻项目审核统计栏，详见 §10.3。
 左侧上方：图片搜索、状态筛选、Tree/Flat 文件列表；下方：常驻 Class palette。
 中间：标注工具、模型选择/自动分割、主画布、文件与比例、横向缩略图带。
 右侧：Current image，当前任务状态/tag、当前实例结果列表、选中实例属性及轻量显示设置。不得在当前结果下方混放全项目类别表。
@@ -102,7 +104,7 @@ Tree 保留 images 下多级子目录，支持逐目录展开/收起、Expand al
 
 ## 8. 画布与快捷键
 
-视图工具使用放大镜 +/-、比例、手形 Pan、四角 Fit。滚轮以指针原图位置为中心缩放；按钮以中心缩放。Space 临时平移，松开恢复原工具。F 适应完整图片，1:1 表示原图像素与 CSS 像素一一对应，不能把 Fit 一律称为100%。缩放范围5%..3200%，保持少量图片可见。标注始终原图坐标，框线/提示点/控制柄保持可操作屏幕尺寸。
+视图工具集中在画布右上角：手形 Pan、放大镜 +/-、比例、四角 Fit；Pan不放在左侧标注工具栏。Pan按钮可切换进入/退出平移，Space保留临时平移。滚轮以指针原图位置为中心缩放；按钮以中心缩放。Space 临时平移，松开恢复原工具。F 适应完整图片，1:1 表示原图像素与 CSS 像素一一对应，不能把 Fit 一律称为100%。缩放范围5%..3200%，保持少量图片可见。标注始终原图坐标，框线/提示点/控制柄保持可操作屏幕尺寸。
 
 快捷键注册表为唯一来源，供命令执行、Tooltip、帮助抽屉共用；可搜索、修改映射、检测冲突和恢复默认。
 
@@ -144,6 +146,105 @@ Tab 保留焦点导航。输入框、IME、浮层不触发画布单键；按钮�
 
 API 使用单 Uvicorn worker；模型由受控后台执行单元持有，推理不阻塞 HTTP。本地模型加载失败仍允许框标注。模型适配器提供 capabilities、load/unload、encode、segment_visual、segment_text，结果不直接写 UI 状态。
 
+### 10.1 多进程推理与设备分配（0.2.0）
+
+CLI segment 与页面 Batch 共用执行层。当前图交互分割保留独立串行通道，不等待整个批次完成；不抢占在途图片，也不保证独立模型在同一GPU上具有硬件调度优先级。不在多个进程之间分拆同一图像的提示。
+
+| 参数 | 取值 | 默认与约束 |
+| --- | --- | --- |
+| --device-type | auto、cuda、cpu、mps | auto 按 CUDA → MPS → CPU 选择；显式类型不可用报错 |
+| --devices | auto 或逗号分隔逻辑编号，如 0,1 | CUDA 默认全部可见设备；CPU/MPS 只接受 auto |
+| --num-workers | auto 或正整数 | auto：CUDA 每个选中设备1个，CPU/MPS 为1个 |
+
+--model 仍为 models.json 中的 ID，不是权重路径。UI、CLI 共用 ModelRegistry：先选择 ID，再解析 source 目录和兼容权重，禁止自动下载。运行时设备参数放在 CLI/任务配置，不混入模型目录字典。
+
+CUDA_VISIBLE_DEVICES 由启动环境设置，程序不覆盖它。--devices 使用该环境过滤和重排后的逻辑编号；例如 CUDA_VISIBLE_DEVICES=2,5 配合 --devices 0,1，分别对应被暴露的原始设备2、5。记录原环境值与逻辑编号映射，不将逻辑编号再次当作宿主机编号解析。device-type=auto 配合数字设备列表时要求 CUDA；不可用则报错，不忽略该列表。拒绝重复、负数、越界或空项。只在 auto 且 devices=auto 时允许硬件选择回退；模型推理失败不自动回退到 CPU。
+
+worker 采用 spawn 进程，各自绑定一个设备、常驻一份模型并维护当前图像编码。设备探测使用隔离的短生命周期探测进程；协调进程不创建 CUDA 上下文。每个 worker 的设备在加载模型前确定，通过显式 device 参数传入适配器。协调器按空闲 worker 动态派发，每个 worker 一个容量1的收件箱；避免共享队列在进程退出前未报告领取状态时无法确认任务归属。不把图片静态切成每卡固定份额。所有框以整张图为一个任务，复用该图编码。
+
+W 个 worker 依次分配给 D 个设备，worker i 绑定 devices[i % D]，各设备 worker 数差不超过1。W<D 时只有前 W 个设备被使用，启动计划明确列出闲置设备；W>D 允许同设备多个模型副本。默认每卡1个，不承诺增加同卡进程会提速；MPS 多进程需真实设备验证。CPU worker 按可用 CPU 数量分配线程预算，限制 PyTorch/BLAS/OpenCV 的嵌套并行，避免进程数乘线程数失控。
+
+协调进程是唯一项目写入者：获得跨进程项目写锁 → 读取标注快照 → 派发纯计算任务 → 验证 image/instance/revision/外部指纹 → 事务保存 → 记账。worker 不构造具有写入副作用的 Project，也不直接改 txt、内部标注或统计索引。项目锁同时约束独立 UI 后端和 CLI；不能只靠进程内 RLock。同一项目第二个独立写入者直接报冲突。
+
+启动前冻结模型配置、权重stat指纹（mtime_ns与大小）、设备计划和图像范围；所有 worker READY 后才派发图片。每个 worker 同时最多持有1张图，总在途最多W张，每个收件箱最多1张，低于原定2W张等待上限，结果队列最多W张，协调进程交错派发/收集/保存，不能先塞满全部任务再收结果。主进程独占结果提交；工作线程只能返回 CPU/RLE 数据，不跨进程传 CUDA tensor。每张图最多一个在途任务，只有保存成功才增加成功数。
+
+缺失模型、设备无效或模型加载 OOM 属于启动失败，不生成“全数据集逐图失败”噪声。单图错误记入报告后继续；worker 崩溃时回收其未完成任务，最多重新派发1次，记录尝试次数，禁止无限重试。所有 worker 不可用则停止。首次 Ctrl+C 停止派发并收尾；再次 Ctrl+C 强制终止，未提交结果不计成功，重跑按既有 mask 跳过已完成工作。退出码：0成功，1有图片失败，2配置/启动失败，130用户中断。
+
+.annodesk/segment-report.json 记录模型/权重标识、选中设备、worker 分配、逐图结果及耗时；不把某个 worker 的存活状态作为恢复依据。页面任务保存相同的执行计划与结果口径，设备/并发参数是每个 job 的快照，运行中修改模型配置不影响在途任务。
+
+### 10.2 Loguru 日志与页面 Logs 抽屉（0.2.0）
+
+增加基础依赖 loguru，统一应用业务日志及标准 logging/Uvicorn 错误。serve、api、ui、segment 每次进程启动建立独立日志会话；--help、docs、doctor、models list 不因查询而创建日志文件。默认位置严格为 ~/.cache/annodesk/{datetime}.log，不采用 macOS 的 ~/Library/Caches 替代路径。datetime 使用本地带微秒的安全文件名，如 2026-10-22_114203_123456.log，排他创建避免多个实例撞名。相对日志目录以命令启动目录解析。
+
+新增运行时 --log-dir 和 --log-level，默认目录如上、文件/终端级别 INFO；DEBUG/TRACE 必须显式启用。正常运行不得重复初始化 sink。默认20MiB轮转、保留14天；启动时也清理过期的本软件日志文件，不动模型及其他缓存。文件以 UTF-8 无 ANSI 输出，格式：
+
+```text
+2026-10-22 11:42:03.127 +08:00 | INFO     | Model ready: sam2.1-small; device=cuda:0; workers=3
+```
+
+默认前缀不包含源码文件名、函数名和行号。错误堆栈写文件，禁用异常局部变量展开（diagnose=False）；页面只接收经过整理的错误摘要和业务上下文，不显示 Python traceback。图片相对路径属于业务信息，可以显示。禁止记录 token、完整环境变量或未经筛选的凭据配置。文件不可写时只发出一次明确警告，回退终端与内存事件，不因日志目录问题丢失标注。
+
+多进程下由协调进程独占 Loguru 文件 sink。worker 的 READY/启动失败/单图结果通过有界结果通道传回，主进程生成结构化业务事件，统一分配会话内递增 sequence 和接收时间。worker 本轮不产生逐框诊断流，因此不额外建设第二套日志队列；将来需要高频诊断时再增加独立有界队列，不能阻塞或丢弃错误结果。结果通道容量W，日志环形缓冲2000条。日志 sink 内不再次调用 logger；正常退出停止 worker 后关闭 sink；文件不可写不影响保存。
+
+日志分为业务重要事件和诊断事件，是否进入 UI 由结构化 ui_visible 标记决定，不只按等级猜测。页面默认展示：
+
+- 配置/模型解析摘要、模型加载成功/失败及有效模型 ID。
+- 设备类型、可见/选中设备、worker 分配及 READY 汇总；大型 worker 池不逐 worker 刷屏。
+- 项目打开/锁冲突、批任务开始、取消、恢复、完成及整体成功/失败摘要。
+- 保存/推理/设备/导出错误及可操作的原因。
+
+正常 HTTP GET、统计/任务轮询、每次 autosave、逐图成功和每个框的推理细节不进入页面。逐图诊断为 DEBUG；HTTP 正常访问降为 DEBUG，日志读取/stream 端点不产生访问日志，防止自我放大。主任务成功完成用 SUCCESS；可恢复问题 WARNING；单图失败 ERROR；服务/执行器不可继续用 CRITICAL。
+
+页面同类错误按 project/job/event_type/error_code 聚合：首次立即展示，10秒窗口结束再发送一条带新 sequence 的合并摘要，含额外重复次数及最后一个图片示例，不修改已发送事件；摘要的 repeat_count 不重复计算首条。文件和逐图报告仍保留每次原始失败记录。聚合是展示层行为，不能改变失败计数。批处理进度由任务组件展示，不每张图片生成一条页面日志。
+
+Logs 入口常驻，未打开项目也可查看服务启动/模型配置错误。抽屉默认宽640px，可拖动，窄屏最大占满窗口；日志区使用等宽数字和自然换行，内容为“时间 | LEVEL | 详情”，没有 logger 源码来源列。默认 scope 为当前项目（进入页面时尚无项目则为 Service），项目筛选包含全局服务事件，可切换 Service / Current project。
+
+筛选由一个等级下拉框和 = / ≥ 切换组成，默认 ≥ INFO。页面等级提供 INFO(20)、SUCCESS(25)、WARNING(30)、ERROR(40)、CRITICAL(50)。= ERROR 只显示 ERROR，≥ ERROR 包含 ERROR 和 CRITICAL；使用数值严重度比较，不按字符串排序。切换条件重新查询近期匹配记录，不只是过滤当前屏幕。DEBUG/TRACE 诊断留在文件，本轮不加入页面等级菜单。
+
+提供 Pause live / Resume、自动滚动开关、Clear view 和下载当前日志。暂停关闭 stream 并保留游标，后台任务与写盘继续；恢复时按游标补取可用记录，超过保留窗口明确提示 gap，不在浏览器无限积压。Clear view 只重置该页面的显示起点，不删除日志文件。复用数据表/列表虚拟化，最多缓存1000条事件、挂载约60行，长文本折行，单条页面 message 最多2000字符并标明截断，完整信息留在文件，保持滚动位置。提供复制当前视图。每行正文可悬停查看完整UI摘要。抽屉关闭时断开该页面的日志 stream，不改变记录行为。
+
+GET /api/v1/logs 返回最近最多200条匹配记录（limit 上限500）、session_id、next_cursor、gap；GET /api/v1/logs/stream 通过 SSE 发送后续事件。两者支持 scope/project_id、level、comparison=eq|gte。过滤后的 next_cursor 为已扫描的最新序号，不能因无匹配事件停滞。记录结构至少包含 session_id、sequence、timestamp、level_name、level_no、message、event_type、project_id、job_id、worker_id、device、repeat_count。
+
+服务内存仅保留最近2000条 UI 重要事件；游标以(session_id, sequence)唯一。SSE 断线续传和切换筛选不重复追加，15秒心跳，服务重启或超出缓冲区时发出 reset/gap，页面明确提示“部分实时日志已过期”，不伪装完整历史。首次 tail 查询快照与 stream 游标连贯，切项目或切筛选时丢弃旧连接响应。
+
+下载接口仅允许当前日志会话的文件，不接受任意文件路径。当前阶段页面展示本服务会话及其 worker 日志，不自动聚合另一个独立 CLI 的实时日志；独立 segment 的日志在其会话文件中查阅。历史会话浏览可后续扩展。远端部署时文件路径位于后端电脑，浏览器通过 HTTP 获取结构化事件和下载文件，不读取客户端 ~/.cache。
+
+### 10.3 常驻项目统计与批处理进度（0.2.0）
+
+现状：0.1.0 只有 Batch 抽屉中的任务完成数，没有常驻项目审核汇总，且旧 completed 含跳过和失败。本次分离“人工审核状态”“模型任务执行进度”，自动分割成功不能变成 Reviewed 或 Approved。
+
+在顶部主工具栏与三栏工作区之间增加一条紧凑统计栏，横跨工作区，不挤占 Class palette；显示当前任务名、首次复核进度和四个状态计数。与右侧 detection/segmentation 切换同步；默认统计整个项目，不随图片列表搜索/滚动变化。窄屏可换两行，所有计数仍可见。
+
+示例：
+
+```text
+Segmentation · Reviewed 80/100 · Not reviewed 20 · Approved 65 · Needs review 10 · Excluded 5
+```
+
+Reviewed 在这里表示“已有一次处理决定”，不是“全部审核通过”：numerator = Approved + Needs review + Excluded，denominator = 当前项目总图片数；tooltip 明确公式，Approved 数独立展示。若只有自动分割完成但无人确认，仍是 Not reviewed，不增加人工复核分子。两类任务各自统计，Excluded 为全图共享。空项目显示 No images，不显示 NaN 或0/0百分比。
+
+四项使用排他展示分类：先判断 excluded=True，属于 Excluded；否则按当前任务的 pending/ok/uncertain 分配至前三项。因而四项相加严格等于 total。只改变统计归类，不覆盖底层原审核状态；取消 Excluded 后恢复到之前的审核分类。无内部标注记录的图片默认为 Not reviewed，只有 YOLO 标签或 mask 也不能视为已复核。四项不是任意多选 tag 的累计计数，普通 tags 不参与该进度。
+
+显示的是已提交状态，不把尚未保存的编辑计入服务端统计；保存成功后立即刷新，失败则保留原计数并显示现有保存错误。自动推理使已通过状态回到 pending 时同步扣减。移入项目回收站的图片不再计入总数，恢复后重新计入。Excluded 未移入回收站时仍计入总数。
+
+GET /api/v1/project/statistics?task=detection|segmentation 返回 total、counts{pending,ok,uncertain,excluded}、reviewed、statistics_revision、status=indexing|ready。统计结果来自可重建的项目级 SQLite 元数据索引，只缓存图片 ID、两个任务状态、excluded、标注 revision 和文件变更信息，不存 mask。它不是标注真值来源：启动异步核对/重建，缺失/陈旧时从内部记录恢复；统计错误不使已提交标注回滚。首次扫描完成前显示 Loading statistics，而不是给出伪造的0或部分总数。只读取复核元数据、不解码 mask、不加载原图，也不通过 Project.annotation() 为统计批量创建标注文件。
+
+唯一写入协调进程在事务提交后更新索引和内存汇总，缓存无法更新时标记索引过期并后台重建。恢复日志、重排、导入、排除、回收站操作也走相同失效流程。统计接口不每次全量扫描，支持大数据集。前端保存成功后主动拉取；后台 job 运行时每2秒刷新，浏览器隐藏时暂停，回到前台立即同步。无后台 job 时每10秒检查更新；并发响应按项目/task与请求generation丢弃过期数据；statistics_revision仅为当前索引生命周期内的更新计数，不能跨后端重启比较大小拒收最新请求。
+
+Tasks 抽屉和工具栏中的轻量活动任务入口使用独立口径：启动快照含 input_total 张图片，预检查跳过 S 张，需要处理范围 T=input_total-S 张（含预检查失败）。显示“Batch: F/T finished · A succeeded · B failed · S skipped”，其中 F=A+B。运行中 worker 仅完成计算但主进程尚未保存的结果仍算在途，不算成功。当前进度条为 F/T，不把跳过当作模型推理成功；T=0 显示 No images require segmentation。取消/中断的剩余量单列，任务错误不能让进度显示“全部成功”。
+
+例如项目共100张，25张已有mask/不符合任务条件；需要处理75张，58张成功、2张失败时显示“60/75 finished · 58 succeeded · 2 failed · 25 skipped”，仍有15张待处理。机器进度与上方 Reviewed 计数互不替代。预检查遇到损坏输入要记为可见失败，并纳入 T、B 和 F，不再派给 worker，不能静默归入 skipped；报告给出具体原因。恢复同一 job 保留原任务快照和计数，重新运行新 job 则重新计算待处理集。
+
+#### 任务抽屉与进度呈现
+
+批量处理是低频功能，不常驻大块进度区域、不挤占画布。工具栏始终有 Tasks；空闲只显示按钮。启动批量分割或导出后自动打开右侧任务抽屉，默认600px宽、可拖动，窄屏不超过视口。关闭/收起仅影响显示，不停止任务；运行时顶部保留 `Tasks ◌ F/T` 和细进度线，随时可再次展开。任务结束保持抽屉开合状态，短暂通知结果；失败保留错误标记，不抢焦点。历史任务折叠，当前任务默认展开。
+
+抽屉利用完整空间分组展示：任务类型/状态/开始时间/已耗时；完整8px条形进度与成功/失败/跳过/剩余数量；只读模型/设备计划；worker编号、设备、当前图片、单图耗时及加载/空闲/停止状态；失败图片和错误；导出后端路径；取消、恢复待处理图片及View logs。
+
+扫描、设备探测、加载模型和最终导出元数据阶段使用不定进度动画和具体阶段文字。处理阶段显示可确定的真实进度，不根据时间编造百分比。单图耗时持续变化，可判断任务仍在执行；不伪造剩余时间预测。导出目前是目录副本，没有压缩归档阶段，进度按已检查图片数推进，最后显示Writing export metadata。取消导出删除本次未完成目录，已有成功导出不动。
+
+日志抽屉记录模型/设备/worker和任务阶段事件；批处理组件展示精确运行进度；统计栏展示项目审核状态。三者共享 project_id/job_id 等标识但不从日志文本推算数量。
+
 ## 11. YOLO 与训练导出
 
 默认工作投影为 YOLO。labels_seg 是工具约定，Ultralytics 默认从 images 映射 labels；仅在 YAML 添加 labels_seg 不能保证训练器采用。
@@ -184,13 +285,15 @@ source 只填写最终一级模型文件夹，不填写 pt/safetensors 文件，
 
 GET /api/v1/models 无需打开项目，返回配置条目、默认 ID、本地可用性、解析路径、错误、文本能力；页面模型选择器从此加载，可 Reload 配置及可用性。选择缺失模型时明确报错。GET /api/v1/project 在未打开项目时返回 200 null，避免把正常初始状态记录成 409；依赖项目的实际操作仍可返回 409。
 
-annodesk segment --project /data/dataset --models-config ./models.json --model <id> 同步处理已有 YOLO 框，不启动 UI 或 HTTP 服务。默认模型来自 JSON，跳过已有 mask、锁定对象及 Excluded 图片；逐图保存到 labels_seg 与内部 RLE，保留 detection 框及类别 ID。中断后再次运行跳过已成功结果；失败明细写入 .annodesk/segment-report.json，失败退出码为 1，成功为 0。输出待人工复核，不自动标为 Approved。
+annodesk segment --project /data/dataset --models-config ./models.json --model <id> 同步处理已有 YOLO 框，不启动 UI 或 HTTP 服务。默认模型来自 JSON，跳过已有 mask、锁定对象及 Excluded 图片；逐图保存到 labels_seg 与内部 RLE，保留 detection 框及类别 ID。中断后再次运行跳过已成功结果；失败明细写入 .annodesk/segment-report.json，单图失败退出码为1，配置/启动失败为2，取消/中断为130，成功为0。输出待人工复核，不自动标为 Approved。
 
 ## 13. 验收和分模块实施
 
 以可运行模块依次提交：工程/CLI；领域和YOLO存储；API和保存；Vue工作台；推理适配/任务；类别迁移/清理/导出；集成和发布验证。未完成能力必须在 UI 显式不可用或在 README 说明，禁止用模拟推理假装真实模型。
 
 关键验收覆盖：YOLO多级路径和冲突、缺少YAML、类ID稳定与迁移、box/mask-only语义、切图保存失败与过时推理、无损mask往返、Excluded恢复、不同origin图片/保存/任务、wheel静态资源及tyro入口、缩略图预算、画布坐标/缩放、快捷键焦点/IME。提交前运行ruff和相应测试，前端提交还需类型检查/构建。
+
+新增验收：设备逻辑编号/CUDA_VISIBLE_DEVICES 映射及各种 W/D 组合；spawn worker 崩溃/重派/取消/主进程单写；日志目录和轮转/保留/权限失败；worker 日志不重复写盘、不出现凭据/诊断变量；等级 = 与 ≥（含 SUCCESS/CRITICAL）精确语义；重复错误聚合不影响真实失败计数；SSE 断线/重启/缓冲过期/过滤切换；浏览器事件/DOM 上限；两任务四项排他计数和 Excluded 取消恢复；自动 mask 不变 Approved；统计重建/事务失败/回收站/空项目；batch succeeded/failed/skipped/cancelled 分离。并行单元测试用可控假适配器验证协议，CUDA/MPS 须另做实际设备测试，不能用 mock 结果声称实际性能。
 
 ## 14. 设计自检记录
 
@@ -202,7 +305,7 @@ annodesk segment --project /data/dataset --models-config ./models.json --model <
 
 ### 交互细化：赋类、提示和品牌图标
 
-Class palette 为日常赋类入口；顶部 Manage classes 为名称、颜色、ID 管理入口。选中框或 mask 后可直接点左侧类别，或按 C 打开带搜索的类别选择器，以 ↑↓ 选择、Enter 确认、Esc 取消。画布选择模式下双击实例也可打开；右侧提供 Change class 按钮。赋类沿用自动保存/撤销，不修改几何，锁定实例不可赋类。1/2/3 仍用于图片审核状态，不与类别快捷键混用。
+Class palette 为日常赋类入口；顶部 Classes 为名称、颜色、ID 管理入口。选中框或 mask 后可直接点左侧类别，或按 C 打开带搜索的类别选择器，以 ↑↓ 选择、Enter 确认、Esc 取消。画布选择模式下双击实例也可打开；右侧提供 Change class 按钮。赋类沿用自动保存/撤销，不修改几何，锁定实例不可赋类。1/2/3 仍用于图片审核状态，不与类别快捷键混用。
 
 全局提示约 150ms 后显示，适用于 pointer hover 及键盘 focus，替代浏览器无法控制延迟的 title 提示。提示展示作用及已有快捷键，离开、点击、滚动、Esc 时关闭；窗口边缘自动调整位置。图标采用同一份 SVG：蓝色标注框与白色 mask 轮廓，复用为 favicon 与左上角品牌标识。
 
@@ -215,3 +318,19 @@ Tags 抽屉顶部始终展示四个内置审核状态及固定颜色/含义（No
 面向安装包用户的操作说明保存于 docs/user-guide.md，与开发者 README 分离。该指南作为 package long description 并以 annodesk/docs/user-guide.md 资源随 wheel 发布，sdist 同时包含源文档；annodesk docs 输出当前安装版本指南，--output 导出 Markdown 且拒绝覆盖已有文件。
 
 入口 HTML（含 /index.html）与状态 JSON 使用 Cache-Control: no-store；HTML 不使用旧 ETag/Last-Modified 条件请求返回 304，以免升级后仍引用已移除的 hash 静态资源。客户端配置和 API fetch 同样显式 no-store。未打开项目时仍由前端空状态分支停止拉取图片列表，不将 409 改为空数据掩盖错误。
+
+### 1.2 增补自检与参考
+
+- 区分了模型 ID、模型目录和执行设备；禁止把 --devices 再当物理编号解析。
+- 多进程共享计算不共享文件写入，统计索引是可重建派生数据，不作为标签真值。
+- UI 日志只显示重要业务事件；文件保留错误细节；等级条件明确 = 与 ≥，无正常轮询刷屏。
+- 通过 Excluded 优先分类保证四项之和等于 total；区分首次复核、Approved 和机器推理完成。
+- 明确当前会话日志范围、跨电脑日志位置、SSE 缓冲上限和计数持久化边界；基础和实际 spawn 协议测试与真实加速器测试分开，未用模拟掩盖真实推理验证限制。
+
+实现参考：[Loguru logger API](https://loguru.readthedocs.io/en/stable/api/logger.html)、[PyTorch multiprocessing best practices](https://docs.pytorch.org/docs/2.14/notes/multiprocessing.html)、[NVIDIA CUDA_VISIBLE_DEVICES](https://docs.nvidia.com/deploy/topics/topic_5_2_1.html)。
+
+0.2.0实施约束：任务仍以JSON持久化，导出仍为目录副本；不引入分布式任务系统、历史日志数据库或GPU性能自动调参。旧0.1任务记录可查看，但计数口径不同，不直接恢复；重新运行新批次会跳过已有结果。统计数据库可删除重建，不删除内部标注。
+
+预检仅按时间节流写任务检查点，阶段结束/取消/异常强制保存；每张推理结果保存后的记账继续持久化，避免预检阶段对完整remaining产生二次方无效磁盘写入。worker与设备探测子进程忽略SIGINT，由协调者控制取消与强制终止。损坏的派生SQLite自动重建，权威标注保持不动。日志断线使用最新游标受控重连，Clear view后旧事件不应重新出现。
+
+模型选择器的悬停提示只呈现简短状态与操作建议，不绑定后端原始error字符串，不展示服务端绝对路径或目录搜索过程。完整模型解析错误继续由CLI诊断和实际运行错误日志提供。

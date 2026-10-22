@@ -1,5 +1,6 @@
 """Application factory for combined, API-only and UI-only deployment."""
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -9,6 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from annodesk import __version__
+from annodesk.events import EventLog, log_routes
 from annodesk.storage import RevisionConflict
 
 
@@ -36,8 +38,23 @@ def create_app(
     api_url: str = "",
     project: Path | None = None,
     models_config: Path | None = None,
+    events: EventLog | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="AnnoDesk", version=__version__)
+    events = events or EventLog()
+    router = None
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        try:
+            yield
+        finally:
+            if router:
+                router.close()
+            events.close()
+
+    app = FastAPI(title="AnnoDesk", version=__version__, lifespan=lifespan)
+    app.state.events = events
+    app.include_router(log_routes(events))
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
     )
@@ -51,6 +68,7 @@ def create_app(
 
     @app.exception_handler(ValueError)
     async def invalid(_request: Request, error: ValueError):
+        events.emit("WARNING", str(error), event_type="request_error")
         return JSONResponse(
             {"detail": str(error)}, status_code=409 if isinstance(error, RevisionConflict) else 400
         )
@@ -62,7 +80,8 @@ def create_app(
     if mode != "ui":
         from annodesk.routes import project_routes
 
-        app.include_router(project_routes(project, models_config))
+        router = project_routes(project, models_config, events)
+        app.include_router(router)
 
         @app.get("/api/v1/info")
         def info():

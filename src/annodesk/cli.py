@@ -9,6 +9,8 @@ from typing import Annotated, Literal
 
 import tyro
 
+from annodesk.devices import DeviceType
+
 
 def serve(
     project: Path | None = None,
@@ -16,15 +18,21 @@ def serve(
     port: int = 8765,
     open: bool = False,
     models_config: Path | None = None,
+    log_dir: Path | None = None,
+    log_level: str = "INFO",
 ) -> None:
     """Start the annotation API and bundled workbench."""
-    import uvicorn
-
     from annodesk.app import create_app
 
     if open:
         webbrowser.open(f"http://{host}:{port}")
-    uvicorn.run(create_app(project=project, models_config=models_config), host=host, port=port)
+    _run_server(
+        create_app(
+            project=project, models_config=models_config, events=_logging(log_dir, log_level)
+        ),
+        host,
+        port,
+    )
 
 
 def api(
@@ -32,24 +40,37 @@ def api(
     host: str = "127.0.0.1",
     port: int = 8765,
     models_config: Path | None = None,
+    log_dir: Path | None = None,
+    log_level: str = "INFO",
 ) -> None:
     """Start only the API; dataset paths refer to this machine."""
-    import uvicorn
-
     from annodesk.app import create_app
 
-    uvicorn.run(
-        create_app(mode="api", project=project, models_config=models_config), host=host, port=port
+    _run_server(
+        create_app(
+            mode="api",
+            project=project,
+            models_config=models_config,
+            events=_logging(log_dir, log_level),
+        ),
+        host,
+        port,
     )
 
 
-def ui(api_url: str, host: str = "127.0.0.1", port: int = 8080) -> None:
+def ui(
+    api_url: str,
+    host: str = "127.0.0.1",
+    port: int = 8080,
+    log_dir: Path | None = None,
+    log_level: str = "INFO",
+) -> None:
     """Host bundled UI pointing at a separately deployed API."""
-    import uvicorn
-
     from annodesk.app import create_app
 
-    uvicorn.run(create_app(mode="ui", api_url=api_url), host=host, port=port)
+    _run_server(
+        create_app(mode="ui", api_url=api_url, events=_logging(log_dir, log_level)), host, port
+    )
 
 
 def doctor() -> None:
@@ -74,6 +95,8 @@ def build_ui() -> None:
 def models(
     action: Annotated[Literal["list"], tyro.conf.Positional] = "list",
     models_config: Path | None = None,
+    log_dir: Path | None = None,
+    log_level: str = "INFO",
 ) -> None:
     """List configured local models and resolution errors. Never download files."""
     from annodesk.models import ModelRegistry
@@ -81,19 +104,43 @@ def models(
     ModelRegistry(models_config).print_json()
 
 
-def segment(project: Path, model: str = "", models_config: Path | None = None) -> None:
+def segment(
+    project: Path,
+    model: str = "",
+    models_config: Path | None = None,
+    device_type: DeviceType = "auto",
+    devices: str = "auto",
+    num_workers: str = "auto",
+    log_dir: Path | None = None,
+    log_level: str = "INFO",
+) -> None:
     """Convert existing YOLO boxes to masks locally, without HTTP or a UI.
 
     Existing masks and locked/excluded objects are skipped. Run again to continue.
     Labels are written to labels_seg; original detection boxes remain in labels.
     """
     from annodesk.batch import segment_dataset
+    from annodesk.devices import ExecutionOptions
     from annodesk.models import ModelRegistry
 
+    events = _logging(log_dir, log_level)
     try:
-        report = segment_dataset(project, model, ModelRegistry(models_config))
-    except ValueError as error:
-        raise SystemExit(str(error)) from error
+        report = segment_dataset(
+            project,
+            model,
+            ModelRegistry(models_config),
+            ExecutionOptions(device_type, devices, num_workers),
+            events,
+        )
+    except KeyboardInterrupt as error:
+        raise SystemExit(130) from error
+    except (ValueError, OSError) as error:
+        events.emit("CRITICAL", str(error), event_type="startup_error")
+        raise SystemExit(2) from error
+    finally:
+        events.close()
+    if report["status"] == "cancelled":
+        raise SystemExit(130)
     print(json.dumps(report, indent=2))
     if report["failed"]:
         raise SystemExit(1)
@@ -119,6 +166,52 @@ def docs(output: Path | None = None) -> None:
         except FileExistsError as error:
             raise SystemExit(f"File already exists; choose another output: {output}") from error
         print(output.expanduser().resolve())
+
+
+def _logging(log_dir, log_level):
+    import sys
+
+    from loguru import logger
+
+    from annodesk.events import EventLog
+
+    logger.remove()
+    logger.add(
+        sys.stderr,
+        level=log_level.upper(),
+        diagnose=False,
+        backtrace=False,
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS ZZ} | {level: <8} | {message}",
+    )
+    return EventLog(log_dir, log_level, files=True)
+
+
+def _run_server(app, host, port):
+    import logging
+
+    import uvicorn
+
+    class Forward(logging.Handler):
+        def emit(self, record):
+            if record.name == "uvicorn.access":
+                if "/api/v1/logs" not in record.getMessage():
+                    app.state.events.emit("DEBUG", record.getMessage(), ui_visible=False)
+            else:
+                app.state.events.emit(
+                    record.levelname,
+                    record.getMessage(),
+                    ui_visible=record.levelno >= 30,
+                    event_type="server",
+                    _exception=record.exc_info,
+                )
+
+    logging.basicConfig(handlers=[Forward()], level=logging.WARNING, force=True)
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        item = logging.getLogger(name)
+        item.handlers.clear()
+        item.setLevel(logging.DEBUG)
+        item.propagate = True
+    uvicorn.run(app, host=host, port=port, log_config=None)
 
 
 def main() -> None:

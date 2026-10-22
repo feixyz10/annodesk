@@ -101,6 +101,7 @@ def trash_excluded(project: Project) -> str:
             shutil.move(source, target)
         for image_id in selected:
             project.entries.pop(image_id)
+        project.invalidate_statistics()
         return operation
 
 
@@ -128,6 +129,7 @@ def restore_trash(project: Project, operation: str):
         atomic_write(manifest_path, json.dumps(manifest))
         fresh = Project(project.root)
         project.entries = fresh.entries
+        project.invalidate_statistics()
 
 
 def export_project(
@@ -135,6 +137,8 @@ def export_project(
     task: Literal["detection", "segmentation"] = "segmentation",
     format: Literal["yolo", "coco"] = "yolo",
     include_pending: bool = False,
+    progress=lambda *_: None,
+    cancelled=lambda: False,
 ) -> Path:
     with project.lock:
         output = project.private / "exports" / uid()
@@ -149,7 +153,11 @@ def export_project(
             "categories": [{"id": i, "name": c["name"]} for i, c in enumerate(categories)],
         }
         split_paths = {}
-        for image_id in project.entries:
+        for completed, image_id in enumerate(project.entries, 1):
+            if cancelled():
+                shutil.rmtree(output)
+                raise ValueError("Export cancelled; incomplete output removed")
+            progress(completed - 1, len(project.entries))
             ann = project.annotation(image_id)
             review = getattr(ann, f"{task}_review")
             instances = [
@@ -239,6 +247,7 @@ def export_project(
             label = output / "labels" / relative.with_suffix(".txt")
             atomic_write(label, "\n".join(lines) + ("\n" if lines else ""))
             report["exported"] += 1
+        progress(len(project.entries), len(project.entries), "packaging")
         for split, paths in split_paths.items():
             atomic_write(output / f"{split}.txt", "\n".join(paths) + "\n")
             if split != "unassigned":

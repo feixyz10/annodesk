@@ -294,6 +294,10 @@ aside {
   padding: 4px;
   background: white;
 }
+.canvasbar button.primary {
+  background: var(--accent);
+  padding: 4px 8px;
+}
 .zoom {
   font-size: 10px;
   min-width: 34px;
@@ -527,9 +531,15 @@ kbd {
   .workspace > .split:last-of-type {
     display: none;
   }
-  header button:nth-of-type(4),
-  header button:nth-of-type(5) {
-    display: none;
+  header {
+    height: auto;
+    min-height: 58px;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+  header button {
+    flex-shrink: 0;
   }
   .canvasbar label {
     display: none;
@@ -610,4 +620,116 @@ kbd {
 }
 .builtin-states p {
   margin: 3px 0 0;
+}
+
+.task-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.task-button-progress {
+  position: absolute;
+  left: 5px;
+  bottom: 0;
+  width: calc(100% - 10px);
+  height: 3px;
+  accent-color: var(--accent);
+}
+.task-spinner {
+  width: 11px;
+  height: 11px;
+  border: 2px solid #c6d5fc;
+  border-top-color: #315fe9;
+  border-radius: 50%;
+  animation: task-spin 1s linear infinite;
+}
+.task-error-badge {
+  background: #fce8ec;
+  color: #a43848;
+  padding: 0 5px;
+  border-radius: 8px;
+}
+.task-notice {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 16px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 4px 20px #192c4820;
+  z-index: 2000;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.task-notice button {
+  margin-left: 12px;
+}
+@keyframes task-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-spinner {
+    animation: none;
+  }
+}
+
+.view-tools {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.header-cluster {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.processing-cluster {
+  border-left: 1px solid var(--line);
+  padding-left: 14px;
+  margin-left: 2px;
+}
+.diagnostics-cluster {
+  border-left: 1px solid var(--line);
+  padding-left: 14px;
+}
+.task-button {
+  min-width: 128px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+.help-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+}
+.project-cluster > button:first-of-type {
+  max-width: 230px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 1050px) {
+  header {
+    height: auto;
+    min-height: 58px;
+    flex-wrap: wrap;
+  }
+  .project-cluster {
+    flex-wrap: wrap;
+    min-width: 0;
+    flex-shrink: 1;
+  }
+  .processing-cluster,
+  .diagnostics-cluster {
+    padding-left: 10px;
+  }
 }
