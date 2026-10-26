@@ -1,4 +1,4 @@
-"""Check the optional adapter contract without importing Torch or a real checkpoint."""
+"""Check the adapter contract without importing Torch or a real checkpoint."""
 
 import sys
 from types import ModuleType, SimpleNamespace

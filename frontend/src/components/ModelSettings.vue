@@ -55,6 +55,22 @@ watch(
     if (props.show && generation === token) changeMode();
   },
 );
+async function reloadConfiguration() {
+  const token = ++generation;
+  busy.value = "Reloading configuration…";
+  check.value = null;
+  error.value = "";
+  try {
+    await store.refreshModels();
+    if (token !== generation || !props.show) return;
+    if (!options.value.some((model) => model.id === draft.value.model)) {
+      busy.value = "";
+      changeMode();
+    }
+  } finally {
+    if (token === generation) busy.value = "";
+  }
+}
 function parameters() {
   const pieces = selectedClasses.value.trim();
   const ids = pieces ? pieces.split(",").map((v) => Number(v.trim())) : null;
@@ -177,7 +193,7 @@ async function apply() {
       }}
     </p>
     <div class="model-actions">
-      <button :disabled="!!busy" @click="store.refreshModels()">
+      <button :disabled="!!busy" @click="reloadConfiguration()">
         {{ t("Reload configuration") }}</button
       ><button
         :disabled="

@@ -239,8 +239,8 @@ class ModelRegistry:
             warnings.append(
                 "Inference dependencies missing: "
                 + ", ".join(status["missing_dependencies"])
-                + '. Install with python -m pip install "annodesk[inference]" '
-                "(or uv sync --extra inference in the repository), then restart. "
+                + ". Run uv sync in the repository, or reinstall AnnoDesk with its dependencies, "
+                "then restart. "
                 "Manual annotation remains available."
             )
         return warnings

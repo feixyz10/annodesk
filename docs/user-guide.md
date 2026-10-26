@@ -36,14 +36,11 @@ python -m pip install ./annodesk-0.2.2-py3-none-any.whl
 python -m pip install "annodesk==0.2.2"
 ```
 
-基础安装即可使用框标注、类别、审核状态和数据管理。若需要 SAM 或检测模型推理，显式安装可选依赖：
+标准安装包含检测和分割共用的推理依赖（Ultralytics / PyTorch），不需要额外安装选项。安装后可检查环境：
 
 ```sh
-python -m pip install "./annodesk-0.2.2-py3-none-any.whl[inference]"
 annodesk doctor
 ```
-
-从 PyPI 安装时使用 `"annodesk[inference]==0.2.2"`。
 
 `doctor` 只检查 torch / ultralytics 是否安装，不验证权重、显卡驱动或推理结果。PyTorch 的 GPU 环境需根据实际机器自行准备；SAM 3 文本推理还需要对应的本地 tokenizer / runtime 依赖。
 
@@ -55,7 +52,7 @@ annodesk doctor
 python -m pip install --upgrade ./annodesk-0.2.2-py3-none-any.whl
 ```
 
-需要推理功能时在 wheel 路径后加 `[inference]`；通过 PyPI 升级时使用相应包名及版本。升级后重启服务并刷新页面，已有标注保留原审核状态。
+通过 PyPI 升级时使用相应包名及版本。升级后重启服务并刷新页面，已有标注保留原审核状态。
 
 ## 2. 启动和打开数据集
 
@@ -125,7 +122,7 @@ labels_seg/train/camera_a/001.txt
 无需指定 `--models-config` 即可使用预设配置：
 
 - 分割默认 `facebook/sam2.1-hiera-tiny`（SAM 2.1 Tiny）。其他 SAM 2.1 规格、MobileSAM 和 SAM 3 也提供 repo ID 形式的预设。
-- 检测默认 `yolo11n`（COCO 80 类）。权重已随安装包提供；推理依赖仍需显式安装。
+- 检测默认 `yolo11n`（COCO 80 类）。权重已随安装包提供；标准安装同时安装推理依赖。
 - SAM 权重不随包提供，也不会自动下载。将兼容权重放到 `$HF_MODELS/facebook/sam2.1-hiera-tiny/`，例如 `sam2.1_hiera_tiny.pt`。仅有 `model.safetensors` 不能用于当前推理。
 
 ```sh
@@ -137,6 +134,8 @@ annodesk serve --project /data/my-dataset --open
 Windows PowerShell 使用 `$env:HF_MODELS = "D:\models"`。`HF_MODELS` 是包含 `facebook/` 等目录的根目录，而非 `.pt` 文件或某个单独模型目录。
 
 启动时若找不到默认模型或未安装推理依赖，终端会显示警告；页面按当前 Detection / Segmentation 任务展示准备提示，点击 **Open Models** 查看设置。仍可手工标注。准备好权重后点击 **Reload configuration**；若刚安装依赖，请重启后端。只有权重可用不代表依赖、设备和类别检查均通过。
+
+重新加载模型配置会清除旧的类别兼容检查；如果所选模型已被删除，将选择该任务的有效默认模型。仍存在的模型保留尚未应用的参数草稿。
 
 需要自定义配置时，创建 `models.json`，例如：
 
@@ -365,7 +364,7 @@ annodesk boxes-from-masks --project /data/my-dataset
 
 检测默认只处理 Detection 的 Not reviewed 且没有实例的图片；`--write-policy append` 显式追加，`--model-classes 0 1` 筛选模型类别，阈值/IoU/尺寸/最大检测数可配置。报告为 `.annodesk/detect-report.json`。`--model` 始终是配置 ID，不是权重文件名。
 
-mask 转框不需要可用模型或 Torch；`--recalculate-boxes` 允许替换未锁定框。报告为 `.annodesk/boxes-from-masks-report.json`。两者均支持 `--review-states pending uncertain ok`；默认只有 pending。退出码、项目锁、日志、取消语义与 segment 相同，详细选项见对应 `--help`。
+mask 转框不需要可用模型，也不加载 Torch；`--recalculate-boxes` 允许替换未锁定框。报告为 `.annodesk/boxes-from-masks-report.json`。两者均支持 `--review-states pending uncertain ok`；默认只有 pending。退出码、项目锁、日志、取消语义与 segment 相同，详细选项见对应 `--help`。
 
 `annodesk boxes-from-masks` 不读取模型配置文件；即使 `ANNODESK_MODELS_CONFIG` 指向缺失或损坏的文件，纯几何操作仍可运行。
 
@@ -379,7 +378,7 @@ CUDA_VISIBLE_DEVICES=2,5 annodesk segment --project /data/my-dataset \
 
 `--device-type auto|cuda|cpu|mps` 默认 auto，依次选择 CUDA、MPS、CPU；显式选择不可用硬件会报错，推理失败不自动改用 CPU。`--devices auto` 默认 CUDA 全部可见设备，`0,1` 是经 `CUDA_VISIBLE_DEVICES` 过滤后的逻辑编号，上例对应宿主机2、5。CPU/MPS 只接受 auto。
 
-`--num-workers auto` 默认每个选中 CUDA 设备1个，CPU/MPS为1个；也可填写正整数。3个 worker/2个设备依次分配为 `cuda:0, cuda:1, cuda:0`，每个 worker 常驻一份模型。同一设备多个 worker 会增加显存占用，并不保证更快。少于设备数时只使用前几个设备，日志会提示闲置设备。CPU 有线程预算；本机MPS双worker已通过真实COCO样本验证；其他机器、CUDA与多GPU性能仍需实测。
+`--num-workers auto` 默认每个选中 CUDA 设备1个，CPU/MPS为1个；也可填写正整数。3个 worker/2个设备依次分配为 `cuda:0, cuda:1, cuda:0`，每个 worker 常驻一份模型。同一设备多个 worker 会增加显存占用，并不保证更快。少于设备数时只使用前几个设备，日志会提示闲置设备。CPU 有线程预算；验证用 Apple M2 Max 的 MPS 双worker已通过真实COCO样本验证；其他机器、CUDA与多GPU性能仍需实测。
 
 ### 日志
 

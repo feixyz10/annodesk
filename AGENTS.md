@@ -8,10 +8,10 @@ features from future targets and hardware validation that has not been performed
 ## Project conventions
 
 - Use Python 3.11+ with uv; repository development uses Python 3.13. Keep `uv.lock` current.
-- CLI commands use **tyro**, never argparse or Typer. Optional model imports stay lazy.
+- CLI commands use **tyro**, never argparse or Typer. Model imports stay lazy; Ultralytics is a main dependency shared by detection and segmentation.
 - Frontend: Vue 3, TypeScript, Pinia, Naive UI and Konva. English and Simplified Chinese UI, light theme.
 - Keep changes focused. Do not add speculative frameworks, generic plugin systems or unrelated refactors.
-- Never download model weights or install inference dependencies implicitly. Model IDs resolve through
+- Never download model weights or install inference dependencies implicitly at runtime. Model IDs resolve through
   `ModelRegistry`; `source` is a directory, resolved relative to its JSON then via `HF_MODELS`.
 - Device numbers are logical indices after `CUDA_VISIBLE_DEVICES`. Never rewrite that environment
   variable or treat logical indices as host GPU numbers.

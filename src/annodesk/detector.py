@@ -43,7 +43,7 @@ class DetectionAdapter:
                 from ultralytics import YOLO
             except ImportError as error:
                 raise ValueError(
-                    "Install inference support with: uv sync --extra inference"
+                    "Inference dependencies are missing. Run uv sync or reinstall AnnoDesk with its dependencies."
                 ) from error
             model = YOLO(str(weights), task="detect")
             if model.task != "detect":

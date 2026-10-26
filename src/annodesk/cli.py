@@ -90,7 +90,7 @@ def ui(
 
 
 def doctor() -> None:
-    """Check whether optional inference dependencies are installed."""
+    """Check whether inference dependencies are installed."""
     print(
         json.dumps(
             {name: bool(importlib.util.find_spec(name)) for name in ["torch", "ultralytics"]}

@@ -85,7 +85,7 @@ npm run dev --prefix frontend
 
 The frontend development server proxies `/api` and runtime UI configuration to port
 8765. Use `annodesk serve --api-only` for an API-only process. Keep a single backend writer per
-dataset; CLI and API enforce this with a filesystem write lease. Optional inference dependencies are installed with `uv sync --extra inference`.
+dataset; CLI and API enforce this with a filesystem write lease. `uv sync` installs the shared detection and segmentation runtime, including Ultralytics. Model imports remain lazy; weights are never downloaded automatically.
 User paths, local model preparation and deployment commands are documented in the
 user guide rather than duplicated here.
 
@@ -112,7 +112,7 @@ in an isolated environment from outside the checkout, including `annodesk docs`
 and `annodesk models list`, before publishing. Publication is a separate action.
 
 Git tracks source, tests, locks and official documentation. Implementation plans,
-previous prototypes, screenshots, environments, model weights and user data are ignored.
+previous prototypes, screenshots, environments, other model weights and user data are ignored. The explicitly bundled `assets/models/yolo11n/` checkpoint is the model exception.
 
 ## Deployment roles
 
@@ -145,7 +145,7 @@ release step after checks and an outside-checkout wheel smoke test.
 Detection adapters return candidates without project access; `operations.py` validates
 strict numeric class mappings and commits new classes with annotations in one journaled
 transaction. Working class IDs may be sparse; exports contain continuous IDs and
-`class-id-map.json`. `boxes-from-masks` uses CPU geometry without Torch or model loading.
+`class-id-map.json`. `boxes-from-masks` uses CPU geometry without importing Torch or loading models.
 
 Project requests and queued inference are bound to a runtime session and annotation
 snapshot. Stale requests cannot overwrite newer edits or another project. Interrupted

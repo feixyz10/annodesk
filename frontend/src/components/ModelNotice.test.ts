@@ -73,12 +73,21 @@ describe("model preparation notice", () => {
       expect(html).not.toContain("Checked secret");
     },
   );
-  it("keeps dependency failures separate from available weights", async () => {
-    const html = await render(config(true, ["torch", "ultralytics"]));
-    expect(html).toContain("torch, ultralytics");
-    expect(html).toContain("annodesk[inference]");
-    expect(html).not.toContain("is unavailable");
-  });
+  it.each(["en", "zh-CN"])(
+    "keeps dependency failures separate from available weights (%s)",
+    async (language) => {
+      setLocale(language);
+      const html = await render(config(true, ["torch", "ultralytics"]));
+      expect(html).toContain("torch, ultralytics");
+      expect(html).toContain(
+        language === "en"
+          ? "Reinstall AnnoDesk with dependencies"
+          : "重新安装 AnnoDesk 及其依赖",
+      );
+      expect(html).not.toContain("[inference]");
+      expect(html).not.toContain("is unavailable");
+    },
+  );
   it("stays hidden while loading and when the selected task is ready", async () => {
     expect(await render(null)).not.toContain('role="status"');
     expect(await render(config(), "detection", "yolo11n")).not.toContain(

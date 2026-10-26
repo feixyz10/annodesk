@@ -50,7 +50,7 @@ const unavailable = computed(
       <p v-if="missing.length">
         {{
           t(
-            "Inference dependencies missing: {dependencies}. Install annodesk[inference] in the backend environment, then restart.",
+            "Inference dependencies missing: {dependencies}. Reinstall AnnoDesk with dependencies in the backend environment, then restart.",
             { dependencies: missing.join(", ") },
           )
         }}

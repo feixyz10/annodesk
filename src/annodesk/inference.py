@@ -101,7 +101,9 @@ class UltralyticsAdapter:
 
     def _load(self, weights, backend, text):
         if importlib.util.find_spec("ultralytics") is None:
-            raise ValueError("Install inference support with: uv sync --extra inference")
+            raise ValueError(
+                "Inference dependencies are missing. Run uv sync or reinstall AnnoDesk with its dependencies."
+            )
         key = (str(weights), weights.stat().st_mtime_ns, backend, bool(text), self.device)
         if self.key != key or self.predictor is None:
             # Invalidate before construction/imports. Publish a new predictor and

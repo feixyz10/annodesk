@@ -187,7 +187,8 @@ def test_missing_dependencies_are_distinct_from_weight_availability(tmp_path, mo
         "segmentation model local was not found locally" in message for message in warnings
     )
     assert any(
-        "pip install" in message and "annodesk[inference]" in message for message in warnings
+        "uv sync" in message and "reinstall AnnoDesk with its dependencies" in message
+        for message in warnings
     )
     assert not any(name in sys.modules for name in ("torch", "ultralytics"))
 

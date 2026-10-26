@@ -6,7 +6,7 @@
 
 审核统计栏始终位于工具栏下，按 Detection/Segmentation 显示全项目 Reviewed 与四类排他计数，不随Tasks关闭或任务结束隐藏。Reviewed=Approved+Needs review+Excluded。自动结果不算人工审核。
 
-模型设置改为居中模态窗口（约900px，最大90vw/80vh）：Detection/Segmentation、模型选择与Available/Loaded状态、显式Load、兼容检查、检测阈值/conf、NMS IoU、imgsz、max_det、模型类别筛选、设备设置及允许新增类别。Apply才保存参数；Cancel不应用未确认设置。加载是运行时动作，可独立于Apply；SAM加载失败清空未完成predictor及相关缓存，切回原模型或重试必须重新初始化，窗口同步实际加载状态；提示中不包含后端路径，主动展开的诊断与日志可包含。
+模型设置改为居中模态窗口（约900px，最大90vw/80vh）：Detection/Segmentation、模型选择与Available/Loaded状态、显式Load、兼容检查、检测阈值/conf、NMS IoU、imgsz、max_det、模型类别筛选、设备设置及允许新增类别。重新加载模型配置时清除旧的兼容检查；若所选模型被删除，切换到当前任务的有效默认模型。仍存在的模型保留未应用参数草稿。Apply才保存参数；Cancel不应用未确认设置。加载是运行时动作，可独立于Apply；SAM加载失败清空未完成predictor及相关缓存，切回原模型或重试必须重新初始化，窗口同步实际加载状态；提示中不包含后端路径，主动展开的诊断与日志可包含。
 
 工作台仅保留当前任务模型的紧凑设置入口、Detect current/Segment current及自动切图处理开关；框来自mask的操作放在当前图片/选中实例区域。Pan与缩放/Fit保持同组。
 
@@ -14,7 +14,7 @@ Tasks改为居中非模态任务窗（约900px，最大90vw/80vh），不遮罩�
 
 ## 2. 检测模型与类别来源
 
-0.2.2预设检测为随包的YOLO11n COCO 80类权重；它仍须通过严格项目类别检查，不因默认模型而自动新增或重映射类别。权重存在与推理依赖安装状态独立，启动和页面分别提醒；其他配置语义保持不变。
+0.2.2预设检测为随包的YOLO11n COCO 80类权重；它仍须通过严格项目类别检查，不因默认模型而自动新增或重映射类别。标准安装包含Ultralytics/PyTorch，检测与分割地位对称；不提供inference extra。权重存在与推理依赖安装状态独立，启动和页面分别提醒；其他配置语义保持不变。
 
 models.json新格式按segmentation/detection对称分组，各组有default_model和models；模型条目保留backend及可选classes_file，task由分组确定。旧顶层扁平格式（default_model/default_detection_model/models）继续兼容，但不能混用两种结构；旧SAM条目自动属于segmentation。仅有det配置也合法，不得把det模型用于SAM提示。
 

@@ -1,6 +1,6 @@
 # AnnoDesk 设计规范
 
-规范修订：1.5.4 · 对应 AnnoDesk 0.2.2 · 2026-10-26。本文及明确链接的版本增补合并此前讨论，作为实现与验收的设计依据；旧草案与交互原型仅供历史参考。
+规范修订：1.5.5 · 对应 AnnoDesk 0.2.2 · 2026-10-26。本文及明确链接的版本增补合并此前讨论，作为实现与验收的设计依据；旧草案与交互原型仅供历史参考。
 
 0.2.0 实现 §10.1 多 worker、§10.2 日志及 §10.3 审核统计与任务抽屉。已发布的0.1.0不包含这些新增能力；实际GPU/SAM权重验证与下文尚未实现的完整产品目标分开记录。
 
@@ -18,10 +18,10 @@
 - 后端：Python、FastAPI、Pydantic、Uvicorn；业务日志采用 Loguru；CLI 使用 tyro，通过类型化配置生成子命令，不自写 argparse，不使用 Typer。
 - 模型：可替换适配器，首批目标为 SAM 2.1、MobileSAM、SAM 3；按能力启用正负点、框、文本。SAM 3 文本与视觉提示分开调用，不假设所有 SAM 衍生模型接口相同。
 - 项目根是一个 uv 项目、一个 Python distribution，名称/import/命令统一为 annodesk。使用 src/annodesk、frontend、tests、docs/specs。
-- uv sync 安装 Python 环境；uv.lock 固定依赖。Python 基准采用当前已配置的 3.13，基础标注服务验证该版本；推理 extras 如不兼容，明确要求另选受支持 Python，而不悄悄更改用户解释器。
-- 可选模型依赖 lazy import；基础安装即可使用 UI、框标注与数据管理，安装 inference extra 后准备真实推理。仅随包提供本项目显式收录的YOLO11n默认检测权重及原始来源/许可说明；SAM等其他权重不随wheel发布，uv sync不下载权重。
+- uv sync 安装 Python 环境；uv.lock 固定依赖。Python 基准采用当前已配置的 3.13，基础标注服务验证该版本；推理依赖如不兼容，明确要求另选受支持 Python，而不悄悄更改用户解释器。
+- Ultralytics为主依赖，标准安装同时提供检测与分割的推理运行库，不再提供inference extra。模型依赖保持lazy import；帮助、UI和纯几何操作不加载Torch或模型。仅随包提供本项目显式收录的YOLO11n默认检测权重及原始来源/许可说明；SAM等其他权重不随wheel发布，uv sync不下载权重。
 - Python 用 ruff format、ruff check（E/F/I/UP/B）统一格式与检查；每次代码提交前执行。领域/存储/API 用 pytest，前端用 vue-tsc、Vite 构建及关键交互验证。
-- Git 跟踪源码、测试、锁文件、正式设计及必要 README；忽略计划、执行记录、旧草案、截图、交互原型、环境、缓存、模型与用户数据。
+- Git 跟踪源码、测试、锁文件、正式设计及必要 README；忽略计划、执行记录、旧草案、截图、交互原型、环境、缓存、其他模型与用户数据；assets/models/yolo11n/为明确随包发布的权重例外。
 
 ## 3. 工作项目与路径
 
