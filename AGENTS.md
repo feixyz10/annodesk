@@ -1,7 +1,8 @@
 # Working on AnnoDesk
 
 Read `docs/specs/annodesk.md` and its `assisted-boxes.md` extension before changing behavior. It records the product contract;
-`docs/user-guide.md` is the guide shipped inside the wheel, and `README.md` describes development.
+`docs/user-guide.md` is the default English guide; `docs/user-guide-cn.md` is its Simplified Chinese
+translation. Both ship inside the wheel; keep them synchronized. `README.md` describes development.
 Update these documents together when behavior or commands change. Clearly distinguish implemented
 features from future targets and hardware validation that has not been performed.
 

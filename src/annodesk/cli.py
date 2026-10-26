@@ -292,16 +292,18 @@ def _run_operation(project, body, models_config, log_dir, log_level):
         raise SystemExit(1)
 
 
-def docs(output: Path | None = None) -> None:
-    """Read the user guide or save a Markdown copy.
+def docs(output: Path | None = None, lang: Literal["en", "zh-CN"] = "en") -> None:
+    """Read the bundled user guide or save a Markdown copy. English by default.
 
     Args:
         output: Destination Markdown file. Omit/None: print the installed guide to the terminal. An existing file is never overwritten.
+        lang: Guide language: en for English or zh-CN for Simplified Chinese. Both are bundled and available offline.
     """
     from importlib.resources import files
 
-    resource = files("annodesk").joinpath("docs/user-guide.md")
-    source = Path(__file__).resolve().parents[2] / "docs/user-guide.md"
+    filename = {"en": "user-guide.md", "zh-CN": "user-guide-cn.md"}[lang]
+    resource = files("annodesk").joinpath("docs", filename)
+    source = Path(__file__).resolve().parents[2] / "docs" / filename
     content = (
         resource.read_text(encoding="utf-8")
         if resource.is_file()

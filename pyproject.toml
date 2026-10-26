@@ -1,6 +1,6 @@
 [project]
 name = "annodesk"
-version = "0.3.0"
+version = "0.3.1"
 description = "A local-first image annotation tool for bounding boxes and instance masks, with SAM-powered interactive segmentation and YOLO-assisted detection."
 readme = "docs/user-guide.md"
 license = "MIT"
@@ -38,9 +38,10 @@ packages = ["src/annodesk"]
 "models.json" = "annodesk/models.json"
 "assets/models" = "annodesk/assets/models"
 "docs/user-guide.md" = "annodesk/docs/user-guide.md"
+"docs/user-guide-cn.md" = "annodesk/docs/user-guide-cn.md"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/", "frontend/", "tests/", "docs/specs/", "docs/validation/", "docs/releases/", "docs/user-guide.md", "pyproject.toml", "README.md", "AGENTS.md", "uv.lock", "models.json", "assets/models/", "LICENSE"]
+include = ["src/", "frontend/", "tests/", "docs/specs/", "docs/validation/", "docs/releases/", "docs/user-guide.md", "docs/user-guide-cn.md", "pyproject.toml", "README.md", "AGENTS.md", "uv.lock", "models.json", "assets/models/", "LICENSE"]
 exclude = ["frontend/node_modules"]
 
 [tool.ruff]

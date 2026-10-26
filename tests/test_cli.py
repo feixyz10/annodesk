@@ -105,21 +105,33 @@ def test_api_only():
     assert client.get("/api/v1/info").json()["protocol"] == 1
 
 
-def test_user_guide_print_and_export(tmp_path, capsys):
-    import pytest
-
+@pytest.mark.parametrize(
+    ("lang", "title"), [("en", "AnnoDesk User Guide"), ("zh-CN", "AnnoDesk 用户指南")]
+)
+def test_user_guide_print_and_export(tmp_path, capsys, lang, title):
     from annodesk.cli import docs
 
-    docs()
+    options = {} if lang == "en" else {"lang": lang}
+    docs(**options)
     printed = capsys.readouterr().out
-    assert "AnnoDesk 用户指南" in printed
+    assert title in printed
     assert "annodesk segment --project" in printed
     output = tmp_path / "guide.md"
-    docs(output)
+    docs(output, **options)
     assert output.read_text() == printed
     with pytest.raises(SystemExit, match="already exists"):
-        docs(output)
+        docs(output, **options)
     assert output.read_text() == printed
+
+
+def test_chinese_guide_is_available_through_cli():
+    result = subprocess.run(
+        [sys.executable, "-m", "annodesk", "docs", "--lang", "zh-CN"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("# AnnoDesk 用户指南")
 
 
 def test_workbench_html_is_always_fresh_even_with_old_browser_validators():

@@ -1,8 +1,8 @@
 # AnnoDesk 设计规范
 
-规范修订：1.6.0 · 对应 AnnoDesk 0.3.0 · 2026-10-26。本文及明确链接的版本增补合并此前讨论，作为实现与验收的设计依据；旧草案与交互原型仅供历史参考。
+规范修订：1.6.1 · 对应 AnnoDesk 0.3.1 · 2026-10-26。本文及明确链接的版本增补合并此前讨论，作为实现与验收的设计依据；旧草案与交互原型仅供历史参考。
 
-0.3.0 已实现提示自动推理、框/mask/提示独立选择与删除、mask选中描边、右侧实例操作、统计与导出确认窗口。发布范围与验证边界见[发布说明](../releases/0.3.0.md)；后文历史版本说明保留时间语境。
+0.3.0 已实现提示自动推理、框/mask/提示独立选择与删除、mask选中描边、右侧实例操作、统计与导出确认窗口。发布范围与验证边界见[发布说明](../releases/0.3.1.md)；后文历史版本说明保留时间语境。
 
 0.2.0 实现 §10.1 多 worker、§10.2 日志及 §10.3 审核统计与任务窗口。已发布的0.1.0不包含这些新增能力；实际GPU/SAM权重验证与下文尚未实现的完整产品目标分开记录。
 
@@ -360,7 +360,7 @@ Tags 窗口顶部始终展示四个内置审核状态及固定颜色/含义（No
 
 快捷键文案约定：同一功能的替代操作使用 or（例如 X or Delete、C or double-click），不同功能依次对应的按键使用 /（例如 Previous / next image 对应 A / D or ← / →）。撤销与重做分行展示，避免组合键歧义。
 
-面向安装包用户的操作说明保存于 docs/user-guide.md，与开发者 README 分离。该指南作为 package long description 并以 annodesk/docs/user-guide.md 资源随 wheel 发布，sdist 同时包含源文档；annodesk docs 输出当前安装版本指南，--output 导出 Markdown 且拒绝覆盖已有文件。
+面向安装包用户的默认英文说明保存于 docs/user-guide.md，简体中文保存于 docs/user-guide-cn.md，与开发者 README 分离并同步维护。英文指南作为 package long description；两份文档均以 annodesk/docs/ 下的同名资源随 wheel 发布，sdist 同时包含源文档。annodesk docs 默认输出英文，--lang zh-CN 选择简体中文，--output 导出 Markdown 且拒绝覆盖已有文件。文档开头不提供语言互链，不依赖 GitHub 托管或 PyPI 解析相对文档链接；已安装用户可离线读取任一语言。
 
 入口 HTML（含 /index.html）与状态 JSON 使用 Cache-Control: no-store；HTML 不使用旧 ETag/Last-Modified 条件请求返回 304，以免升级后仍引用已移除的 hash 静态资源。客户端配置和 API fetch 同样显式 no-store。未打开项目时仍由前端空状态分支停止拉取图片列表，不将 409 改为空数据掩盖错误。
 

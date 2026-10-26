@@ -2,8 +2,10 @@
 
 A local-first image annotation tool for bounding boxes and instance masks, with SAM-powered interactive segmentation and YOLO-assisted detection.
 
-**Using the installed package:** read the [user guide](docs/user-guide.md).
-It ships inside the wheel and is available with `annodesk docs`. The guide covers
+**Using the installed package:** read the [English user guide](docs/user-guide.md)
+or [Simplified Chinese user guide](docs/user-guide-cn.md).
+Both ship inside the wheel. `annodesk docs` shows English by default;
+`annodesk docs --lang zh-CN` shows Simplified Chinese. The guide covers
 installation, model directories, annotation, review, export and headless conversion.
 This README is for repository development.
 
@@ -42,7 +44,7 @@ weights remain external and resolve from the configured model root.
 Version 0.2.1 removes frontend build tooling from the user CLI, orders help by task,
 and keeps the shipped guide focused on installation, annotation and operation.
 
-The current local release is **0.3.0**; see the [release notes](docs/releases/0.3.0.md) for changes, upgrade guidance and verification boundaries.
+The current release is **0.3.1**; see the [release notes](docs/releases/0.3.1.md) for changes, upgrade guidance and verification boundaries.
 
 Version 0.2.2 replaces the standalone `api` command with `serve --api-only`.
 
@@ -58,7 +60,7 @@ inference dependencies, while manual annotation remains available.
 The release regression suite covers journal recovery, first-read materialization,
 queued inference snapshots, cross-project and cross-image edits, category/tag draft
 rollback, batch/trash coordination, EXIF/TIFF coordinates and virtual-list bounds.
-The 0.3.0 regression check passed 237 Python tests and 170 frontend tests, Ruff,
+The 0.3.1 regression check passed 239 Python tests and 170 frontend tests, Ruff,
 the frontend build and an installed-wheel CLI/API/docs/static-resource smoke test.
 All eight user command help pages are checked without loading inference dependencies.
 Parameter help explains omitted/None values, configuration precedence, device plans and
@@ -106,8 +108,8 @@ Frontend development uses `npm ci --prefix frontend` followed by
 Commit matching `src/annodesk/web_dist` resources with frontend changes: an ordinary
 clone plus `uv sync` can then serve the workbench without Node.
 
-Hatchling bundles the frontend, default `models.json` and `docs/user-guide.md` into
-the wheel. The user guide is also the package long description. Validate the wheel
+Hatchling bundles the frontend, default `models.json`, and both user guides into
+the wheel. The English guide is also the package long description. Validate the wheel
 in an isolated environment from outside the checkout, including `annodesk docs`
 and `annodesk models list`, before publishing. Publication is a separate action.
 
@@ -125,7 +127,7 @@ independent web hosting or development. Browsers call that API directly.
 All dataset/model paths and saves belong to the API machine. Hosting `ui` on a
 laptop does not let a remote API read the laptop's dataset. Local dataset ownership
 with image/prompt upload to a remote inference-only node is not implemented.
-See the [deployment guide](docs/user-guide.md#8-运行位置与浏览器访问地址) for machine-by-machine commands.
+See the [deployment guide](docs/user-guide.md#8-deployment-and-browser-addresses) for machine-by-machine commands.
 
 ## Runtime boundaries
 
@@ -138,7 +140,7 @@ Exports remain directory exports (no archive or browser upload/download of datas
 Tasks opens automatically when a task starts; closing it leaves a compact toolbar
 progress indicator without occupying canvas space. Logs is independent of an open project.
 
-Package and frontend metadata are aligned at 0.3.0. Releases use annotated Git tags;
+Package and frontend metadata are aligned at 0.3.1. Releases use annotated Git tags;
 commit messages describe changes without version numbers. Publishing is an explicit
 release step after checks and an outside-checkout wheel smoke test.
 
