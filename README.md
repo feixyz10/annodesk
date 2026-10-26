@@ -35,20 +35,41 @@ commit path. Version 0.2.0 was also checked with real SAM 2.1 Tiny and YOLO11n w
 on 16 COCO images, CPU and Apple MPS (including two workers); see the
 [real-model validation report](docs/validation/real-models-2026-10-22.md).
 CUDA, other model families and other dependency versions remain unverified.
-Weights are never downloaded implicitly, and are not included in distributions.
+Weights are never downloaded implicitly. The unmodified YOLO11n COCO checkpoint is
+bundled under `assets/models/yolo11n/`, with its upstream notices and SHA256. SAM
+weights remain external and resolve from the configured model root.
 
 Version 0.2.1 removes frontend build tooling from the user CLI, orders help by task,
 and keeps the shipped guide focused on installation, annotation and operation.
+
+See the [local release notes](docs/releases/0.2.2.md) for the complete patch scope.
+
+Version 0.2.2 replaces the standalone `api` command with `serve --api-only`.
+
+Version 0.2.2 presets `facebook/sam2.1-hiera-tiny` for segmentation and bundled
+`yolo11n` for detection. `models.json` has symmetric `segmentation` / `detection`
+groups with their own defaults and model lists; legacy flat files remain readable.
+Model IDs for segmentation use repository IDs. Startup
+warnings and bilingual model setup notices distinguish missing files from missing
+inference dependencies, while manual annotation remains available.
 
 ## Release verification
 
 The release regression suite covers journal recovery, first-read materialization,
 queued inference snapshots, cross-project and cross-image edits, category/tag draft
 rollback, batch/trash coordination, EXIF/TIFF coordinates and virtual-list bounds.
-The 2026-10-23 patch release check passed 183 Python tests and 84 frontend tests, Ruff,
+The 2026-10-26 local check passed 210 Python tests and 89 frontend tests, Ruff,
 the frontend build and an installed-wheel CLI/API/docs/static-resource smoke test.
-All nine user command help pages are checked without loading inference dependencies.
+All eight user command help pages are checked without loading inference dependencies.
+Parameter help explains omitted/None values, configuration precedence, device plans and
+write policies. Read-only model listing exposes no ineffective logging options.
 Synthetic protocol tests do not extend the real hardware claims above.
+
+## License
+
+AnnoDesk original source is MIT licensed; see [LICENSE](LICENSE). Third-party models
+and dependencies retain their own licenses. In particular, the bundled YOLO11n
+checkpoint is not MIT licensed; see [model notice](assets/models/yolo11n/NOTICE.md).
 
 ## Development setup
 
@@ -63,7 +84,7 @@ npm run dev --prefix frontend
 ```
 
 The frontend development server proxies `/api` and runtime UI configuration to port
-8765. Use `annodesk api` for an API-only process. Keep a single backend writer per
+8765. Use `annodesk serve --api-only` for an API-only process. Keep a single backend writer per
 dataset; CLI and API enforce this with a filesystem write lease. Optional inference dependencies are installed with `uv sync --extra inference`.
 User paths, local model preparation and deployment commands are documented in the
 user guide rather than duplicated here.
@@ -93,6 +114,19 @@ and `annodesk models list`, before publishing. Publication is a separate action.
 Git tracks source, tests, locks and official documentation. Implementation plans,
 previous prototypes, screenshots, environments, model weights and user data are ignored.
 
+## Deployment roles
+
+`serve` runs the API, dataset writer and inference alongside the bundled page.
+For a GPU server, run `annodesk serve --host 0.0.0.0` there and open
+`http://SERVER_IP:8765` in a local browser; a separate `ui` process is unnecessary.
+`serve --api-only` omits the page; `ui` hosts only static assets and the API address, for
+independent web hosting or development. Browsers call that API directly.
+
+All dataset/model paths and saves belong to the API machine. Hosting `ui` on a
+laptop does not let a remote API read the laptop's dataset. Local dataset ownership
+with image/prompt upload to a remote inference-only node is not implemented.
+See the [deployment guide](docs/user-guide.md#8-运行位置与浏览器访问地址) for machine-by-machine commands.
+
 ## Runtime boundaries
 
 `devices.py` resolves logical device plans using an isolated probe; `execution.py`
@@ -104,7 +138,7 @@ Exports remain directory exports (no archive or browser upload/download of datas
 Tasks opens automatically when a task starts; closing it leaves a compact toolbar
 progress indicator without occupying canvas space. Logs is independent of an open project.
 
-Package and frontend metadata are aligned at 0.2.1. Releases use annotated Git tags;
+Package and frontend metadata are aligned at 0.2.2. Releases use annotated Git tags;
 commit messages describe changes without version numbers. Publishing is an explicit
 release step after checks and an outside-checkout wheel smoke test.
 

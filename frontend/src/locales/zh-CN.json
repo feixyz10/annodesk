@@ -370,5 +370,12 @@
   "Class name": "类别名称",
   "Class color": "类别颜色",
   "Tag name": "标签名称",
-  "Tag color": "标签颜色"
+  "Tag color": "标签颜色",
+  "Model setup": "模型准备",
+  "No {task} model is configured. Add a local model in models.json, then Reload in Models.": "尚未配置{task}模型。请在 models.json 中添加本地模型，然后在 Models 中重新加载配置。",
+  "Inference dependencies missing: {dependencies}. Install annodesk[inference] in the backend environment, then restart.": "缺少推理依赖：{dependencies}。请在后端环境安装 annodesk[inference]，然后重启服务。",
+  "Manual annotation remains available. Models are never downloaded automatically.": "仍可手工标注，模型不会自动下载。",
+  "Open Models": "打开模型设置",
+  "Model {model} was not found locally. Check its directory in models.json, then Reload in Models.": "找不到模型 {model}。请检查 models.json 中的模型目录，然后在模型设置中重新加载配置。",
+  "Open a project to load a model or save settings. You can reload model configuration without a project.": "请先打开项目，再加载模型或保存设置；无需打开项目即可重新加载模型配置。"
 }

@@ -48,7 +48,8 @@ Publishing requires an explicit user request; committing a version bump does
 not authorize publication. Never amend a published release to add new features.
 
 Git tracks source, tests, lockfiles and official docs. Keep plans under ignored `docs/plans/`;
-previews/screenshots under ignored `docs/design-previews/`. Do not commit models, user datasets,
+previews/screenshots under ignored `docs/design-previews/`. The explicitly bundled `assets/models/yolo11n/` checkpoint and its upstream notices are the
+only model exception. Do not commit other models, user datasets,
 caches, local credentials or execution notes. Use `rg` for search and meaningful tests for risky
 state transitions. When reviews are requested, evaluate findings individually, fix reproducible
 issues, and reject unrelated or speculative work with a brief reason.

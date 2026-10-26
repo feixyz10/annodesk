@@ -32,8 +32,13 @@ def dataset(root, model="test", count=1):
     return ModelRegistry(cfg)
 
 
-def test_headless_converts_yolo_keeps_classes_and_resumes(tmp_path):
+@pytest.mark.parametrize("grouped", [False, True])
+def test_headless_converts_yolo_keeps_classes_and_resumes(tmp_path, grouped):
     registry = dataset(tmp_path, count=4)
+    if grouped:
+        raw = json.loads(registry.path.read_text())
+        registry.path.write_text(json.dumps({"segmentation": raw}))
+        registry.reload()
     first = segment_dataset(
         tmp_path,
         "",

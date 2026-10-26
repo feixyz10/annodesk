@@ -1,6 +1,6 @@
 # AnnoDesk 设计规范
 
-规范修订：1.5.3 · 对应 AnnoDesk 0.2.1 · 2026-10-23。本文及明确链接的版本增补合并此前讨论，作为实现与验收的设计依据；旧草案与交互原型仅供历史参考。
+规范修订：1.5.4 · 对应 AnnoDesk 0.2.2 · 2026-10-26。本文及明确链接的版本增补合并此前讨论，作为实现与验收的设计依据；旧草案与交互原型仅供历史参考。
 
 0.2.0 实现 §10.1 多 worker、§10.2 日志及 §10.3 审核统计与任务抽屉。已发布的0.1.0不包含这些新增能力；实际GPU/SAM权重验证与下文尚未实现的完整产品目标分开记录。
 
@@ -10,7 +10,7 @@
 
 面向图像数据集的本地优先标注工具，支持检测框和实例分割。从纯图片开始标注，或直接打开 Ultralytics YOLO 框数据集，以 SAM 按框预分割，再人工修改与复核。工作台支持英文和简体中文，采用浅色 Web 界面；未来可复用前端以 Tauri 包装客户端。
 
-支持单机运行及前后端分机部署。首版不做账号、权限、TLS、多人协作、视频、训练。不要把“浏览器与后端分机”与“本机数据、远端独立推理节点”混为一谈：后者不属于首版。
+支持单机运行及前后端分机部署。首版不做账号、权限、TLS、多人协作、视频、训练。前后端分机指独立托管网页；数据集读写和推理始终在API电脑。用户在本机浏览器访问服务器serve即可远程使用，不要求本机运行ui。本地项目读写、逐图上传图片和提示到远端推理节点并返回mask/框的模式尚未实现，应作为后续独立能力设计。
 
 ## 2. 技术与仓库
 
@@ -19,7 +19,7 @@
 - 模型：可替换适配器，首批目标为 SAM 2.1、MobileSAM、SAM 3；按能力启用正负点、框、文本。SAM 3 文本与视觉提示分开调用，不假设所有 SAM 衍生模型接口相同。
 - 项目根是一个 uv 项目、一个 Python distribution，名称/import/命令统一为 annodesk。使用 src/annodesk、frontend、tests、docs/specs。
 - uv sync 安装 Python 环境；uv.lock 固定依赖。Python 基准采用当前已配置的 3.13，基础标注服务验证该版本；推理 extras 如不兼容，明确要求另选受支持 Python，而不悄悄更改用户解释器。
-- 可选模型依赖 lazy import；基础安装即可使用 UI、框标注与数据管理，安装 inference extra 后准备真实推理。模型权重不随 wheel 发布，也不由 uv sync 暗中下载。
+- 可选模型依赖 lazy import；基础安装即可使用 UI、框标注与数据管理，安装 inference extra 后准备真实推理。仅随包提供本项目显式收录的YOLO11n默认检测权重及原始来源/许可说明；SAM等其他权重不随wheel发布，uv sync不下载权重。
 - Python 用 ruff format、ruff check（E/F/I/UP/B）统一格式与检查；每次代码提交前执行。领域/存储/API 用 pytest，前端用 vue-tsc、Vite 构建及关键交互验证。
 - Git 跟踪源码、测试、锁文件、正式设计及必要 README；忽略计划、执行记录、旧草案、截图、交互原型、环境、缓存、模型与用户数据。
 
@@ -194,7 +194,7 @@ W 个 worker 依次分配给 D 个设备，worker i 绑定 devices[i % D]，各�
 
 ### 10.2 Loguru 日志与页面 Logs 抽屉（0.2.0）
 
-增加基础依赖 loguru，统一应用业务日志及标准 logging/Uvicorn 错误。serve、api、ui、segment 每次进程启动建立独立日志会话；--help、docs、doctor、models list 不因查询而创建日志文件。默认位置严格为 ~/.cache/annodesk/{datetime}.log，不采用 macOS 的 ~/Library/Caches 替代路径。datetime 使用本地带微秒的安全文件名，如 2026-10-22_114203_123456.log，排他创建避免多个实例撞名。相对日志目录以命令启动目录解析。
+增加基础依赖 loguru，统一应用业务日志及标准 logging/Uvicorn 错误。serve、ui、segment 每次进程启动建立独立日志会话；--help、docs、doctor、models list 不因查询而创建日志文件。默认位置严格为 ~/.cache/annodesk/{datetime}.log，不采用 macOS 的 ~/Library/Caches 替代路径。datetime 使用本地带微秒的安全文件名，如 2026-10-22_114203_123456.log，排他创建避免多个实例撞名。相对日志目录以命令启动目录解析。
 
 新增运行时 --log-dir 和 --log-level，默认目录如上、文件/终端级别 INFO；DEBUG/TRACE 必须显式启用。正常运行不得重复初始化 sink。默认20MiB轮转、保留14天；启动时也清理过期的本软件日志文件，不动模型及其他缓存。文件以 UTF-8 无 ANSI 输出，格式：
 
@@ -281,20 +281,20 @@ YOLO 多边形对孔洞/不连通实例可能有损，输出告警及报告；CO
 
 ## 12. CLI、构建与部署
 
-单一 console script 使用 tyro，仅提供用户命令，依用途排序：serve；segment、detect、boxes-from-masks；api、ui；models list、doctor、docs。帮助开头解释启动、批处理、分机部署和诊断用途，不增加开发子命令。CLI help 不加载模型；模型配置与项目标签分离，模型只从本地读取，禁止自动下载和推理时自动安装依赖。
+单一 console script 使用 tyro，仅提供用户命令，依用途排序：serve；segment、detect、boxes-from-masks；ui；models list、doctor、docs。帮助开头解释启动、批处理、分机部署和诊断用途，不增加开发子命令。CLI help 不加载模型；模型配置与项目标签分离，模型只从本地读取，禁止自动下载和推理时自动安装依赖。
 
 ```bash
 uv sync
 uv run annodesk serve --project /data/dataset --open
 annodesk serve --host 0.0.0.0 --port 8765
-annodesk api --host 0.0.0.0 --port 8765
+annodesk serve --api-only --host 0.0.0.0 --port 8765
 annodesk ui --port 8080 --api-url http://gpu-host:8765
 npm ci --prefix frontend
 npm run build --prefix frontend
 uv build
 ```
 
-默认127.0.0.1:8765，仅 --open 打开浏览器，端口冲突报错。serve 同源提供 API+已编译 UI；api 仅后端；ui 只提供已编译资源和运行时 API 配置，不加载推理。数据集始终在后端机器，客户端本地图片需上传/同步/挂载后使用。
+默认127.0.0.1:8765，仅 --open 打开浏览器，端口冲突报错。serve 同源提供 API+已编译 UI；serve --api-only 仅后端；ui 只提供已编译资源和运行时 API 配置，不加载推理。数据集始终在后端机器，客户端本地图片需上传/同步/挂载后使用。
 
 API /api/v1，info 返回应用/协议版本和能力；运行时 /ui-config.json 指定 API base，不写死 localhost、不重新编译。图片/mask/缩略图使用 ID URL，通过 HTTP 获取；跨源支持 CORS 和无 credentials 请求。SSE/任务轮询恢复按 job ID，不丢持久状态。
 
@@ -302,7 +302,7 @@ Hatchling 打包。web_dist 作为 package data 随 wheel/sdist 发布，普通�
 
 ### 12.1 本地模型配置与无界面分割
 
-仓库提供 models.json；命令行 --models-config 优先，其次 ANNODESK_MODELS_CONFIG、当前目录 models.json、仓库默认、wheel 内置默认。JSON 定义 default_model 及 models 数组，每项含 id、name、backend(sam/sam2/mobile_sam/sam3)、source（模型最终一级目录，不配置 checkpoint 文件名）。ID 唯一，默认 ID 必须存在。
+仓库提供 models.json；命令行 --models-config 优先，其次 ANNODESK_MODELS_CONFIG、当前目录 models.json、仓库默认、wheel 内置默认。JSON 按segmentation/detection分组，各自定义default_model及models数组；旧顶层扁平格式继续兼容，但禁止混写。每项含 id、name、backend(sam/sam2/mobile_sam/sam3)、source（模型最终一级目录，不配置 checkpoint 文件名）。ID 唯一，默认 ID 必须存在。
 
 source 只填写最终一级模型文件夹，不填写 pt/safetensors 文件，也不提供 checkpoint 字段。展开环境变量和 ~ 后统一两步查找，不识别 repo ID 类型：先相对 JSON 目录 resolve 并检查 is_dir；不是目录则检查 $HF_MODELS/source（HF_MODELS 已设置时）。绝对路径直接检查目录，缺失报错，不剥离根路径后回退。repo ID 与普通相对目录的查找规则相同；本地同名文件不视为目录。
 
@@ -387,3 +387,31 @@ Tags 抽屉顶部始终展示四个内置审核状态及固定颜色/含义（No
 ## 0.2.1 CLI 与用户文档整理
 
 移除build-ui函数及CLI入口，不再从安装包调用npm或探测前端源码；已有用户命令名称和参数不变。用户指南仅保留安装/升级、配置、标注、部署、排错及必要数据格式边界，开发流程和实现说明留在README/spec；指南随wheel及PyPI长描述同步发布。0.2.0附注标签和已发布文件保持不变，0.2.1使用新提交及附注标签。
+
+## 0.2.2 预设模型与准备提示
+
+默认配置直接可用，不要求手写models.json。分割默认ID/source均为facebook/sam2.1-hiera-tiny；SAM2.1其他规格、MobileSAM、SAM3使用各自repo ID作为ID及source。原有自定义ID仍合法，显式配置替换默认配置，不自动合并。相对JSON优先、HF_MODELS回退及禁止自动下载规则保持不变。
+
+检测默认yolo11n，source=assets/models/yolo11n；仓库保留唯一明确纳入的真实checkpoint，构建时映射到annodesk/assets/models/yolo11n，因此源码和wheel均相对各自models.json解析，无本机绝对路径或运行时复制。随文件记录SHA256、来源和上游许可，AnnoDesk原创代码MIT声明不改写第三方许可。
+
+模型状态保留available表示目录/唯一兼容权重存在，新增missing_dependencies表示未安装torch/ultralytics，仅find_spec探测，不加载模型。启动serve（含--api-only）时逐任务检查默认模型并输出一次业务警告；缺权重只提示找不到模型及JSON/Reload指引，不提示HF_MODELS未设置或要求设置环境变量，缺依赖给显式安装及重启指引。轮询及Reload不重复写启动日志。配置缺失或损坏仍明确报错；缺模型不阻止服务和手工标注启动。
+
+页面按当前任务/所选模型显示非阻塞准备提示；YOLO可用不能掩盖SAM不可用。提示不含服务端路径和原始diagnostic，包含进入Models入口。没有打开项目也可查看配置/Reload，加载与保存设置仍需项目；Models窗口复用相同提示，明确区分缺权重和缺依赖。放好权重并Reload后提示响应式消失，语言切换即时生效，长repo ID可换行；模型“Available”不承诺设备/类别/真实推理已验证。
+
+### 对称分组配置
+
+models.json采用segmentation和detection两个子对象，每组支持default_model及models。新格式省略task，由所在分组确定并与backend校验；允许仅一组或另一组为空，但全文件至少一个模型。组内未指定default_model时默认第一个，指定时必须属于该组；模型ID全局唯一。未知根/组/模型字段、分组与旧扁平字段混用、backend错组、错误默认或重复ID均拒绝。
+
+ModelConfig在读取时归一化为既有default_model/default_detection_model/models内部结构，API和spawn worker配置协议保持不变；现有扁平JSON继续可读，不自动改写用户文件。目录依然相对JSON解析并回退HF_MODELS；模型找不到时的提醒不判断或强调环境变量是否设置。
+
+### CLI 参数说明
+
+全部用户命令通过tyro解析函数Args文档，逐参数说明含义、值域/示例及省略后的语义。可选参数的None不只展示Python默认值：project为暂不打开项目，models_config按既定优先级查找，log_dir使用~/.cache/annodesk，docs.output输出终端，detect.model_classes表示全部模型类别再经项目兼容筛选。模型ID空字符串对应任务默认值；devices/num_workers的auto说明逻辑设备与分配规则。models list移除原先不生效的log_dir/log_level参数，保持只读且不创建日志。CLI帮助仍不加载推理依赖或权重。
+
+### 部署角色与地址说明
+
+serve在数据集/推理电脑运行，同时托管API与网页。GPU服务器serve绑定0.0.0.0后，本机浏览器直接访问http://服务器IP:8765即可，无需本机ui。serve --api-only同样拥有数据集、标注存储和推理，仅省略网页；ui可在本机或独立网页主机运行，默认本机浏览器访问http://127.0.0.1:8080，浏览器直接连接api_url指定的远端API。ui不代理数据集、不读取/保存本机项目、不上传图片到远端推理节点。
+
+CLI的serve（含--api-only）/ui概述、project、api_url及open帮助须说明运行电脑、浏览器地址、127.0.0.1和监听地址的区别。user guide区分同机、服务器serve、本机ui+服务器serve --api-only三种方式，推荐普通远程浏览器使用服务器serve。共享/同步/挂载只能使服务器能读写文件，不冒充尚未实现的本地项目+远程纯推理架构。
+
+0.2.2最终CLI入口删除独立api命令，统一为serve --api-only；不保留别名。该模式不托管网页，仍拥有项目读写和推理，与--open同用时在创建日志/服务前报错。内部HTTP应用的mode=api保持不变，不影响API协议。

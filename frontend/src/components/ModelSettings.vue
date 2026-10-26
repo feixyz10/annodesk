@@ -4,6 +4,7 @@ import { computed, ref, watch } from "vue";
 import { NModal } from "naive-ui";
 import { request, type ModelCheck, type ModelParameters } from "../api";
 import { useProject } from "../stores/project";
+import ModelNotice from "./ModelNotice.vue";
 const props = defineProps<{ show: boolean }>();
 const emit = defineEmits<{ "update:show": [boolean] }>();
 const store = useProject();
@@ -140,6 +141,13 @@ async function apply() {
         )
       }}
     </p>
+    <p v-if="!store.meta" class="muted">
+      {{
+        t(
+          "Open a project to load a model or save settings. You can reload model configuration without a project.",
+        )
+      }}
+    </p>
     <div class="model-form">
       <label
         >{{ t("Model")
@@ -160,14 +168,7 @@ async function apply() {
         }}</span>
       </div>
     </div>
-    <p v-if="!options.length">
-      {{
-        t(
-          "No {task} models configured. Add a compatible local model to models.json, then Reload.",
-          { task: taskLabel(mode) },
-        )
-      }}
-    </p>
+    <ModelNotice :config="store.models" :task="mode" :model-id="draft.model" />
     <p v-if="mode === 'segmentation' && chosen?.mask_candidates" class="muted">
       {{
         t(
@@ -178,11 +179,27 @@ async function apply() {
     <div class="model-actions">
       <button :disabled="!!busy" @click="store.refreshModels()">
         {{ t("Reload configuration") }}</button
-      ><button :disabled="!!busy || !chosen?.available" @click="inspect(false)">
+      ><button
+        :disabled="
+          !!busy ||
+          !store.meta ||
+          !chosen?.available ||
+          !!store.models?.missing_dependencies?.length
+        "
+        @click="inspect(false)"
+      >
         {{
           mode === "detection" ? t("Check classes") : t("Check availability")
         }}</button
-      ><button :disabled="!!busy || !chosen?.available" @click="inspect(true)">
+      ><button
+        :disabled="
+          !!busy ||
+          !store.meta ||
+          !chosen?.available ||
+          !!store.models?.missing_dependencies?.length
+        "
+        @click="inspect(true)"
+      >
         {{ t("Load model") }}
       </button>
     </div>
@@ -339,7 +356,11 @@ async function apply() {
         )
       }}</span
       ><button @click="emit('update:show', false)">{{ t("Cancel") }}</button
-      ><button class="primary" :disabled="!!busy || !chosen" @click="apply">
+      ><button
+        class="primary"
+        :disabled="!!busy || !store.meta || !chosen"
+        @click="apply"
+      >
         {{ t("Apply") }}
       </button>
     </div>

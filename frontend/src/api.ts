@@ -161,6 +161,7 @@ export interface ModelOption {
   mask_candidates?: boolean;
 }
 export interface ModelsConfig {
+  missing_dependencies?: string[];
   config: string;
   default_model: string;
   default_detection_model?: string;

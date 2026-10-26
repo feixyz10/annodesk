@@ -1,11 +1,17 @@
 """Local-only model registry. Repository IDs are directory names, never downloads."""
 
+import importlib.util
 import json
 import os
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+def missing_inference_dependencies() -> list[str]:
+    """Probe installation only; never import inference runtimes to show status."""
+    return [name for name in ("torch", "ultralytics") if importlib.util.find_spec(name) is None]
 
 
 class ModelEntry(BaseModel):
@@ -28,11 +34,39 @@ class ModelEntry(BaseModel):
         return self
 
 
+class ModelGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    default_model: str = ""
+    models: list[ModelEntry] = Field(default_factory=list)
+
+
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     default_model: str = ""
     default_detection_model: str = ""
     models: list[ModelEntry] = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_groups(cls, value):
+        if not isinstance(value, dict) or not {"segmentation", "detection"}.intersection(value):
+            return value
+        if {"models", "default_model", "default_detection_model"}.intersection(value):
+            raise ValueError("Grouped and legacy model configuration cannot be mixed")
+        if unknown := set(value) - {"segmentation", "detection"}:
+            raise ValueError("Unknown model configuration fields: " + ", ".join(sorted(unknown)))
+        normalized = {"models": []}
+        for task, default_key in (
+            ("segmentation", "default_model"),
+            ("detection", "default_detection_model"),
+        ):
+            group = ModelGroup.model_validate(value.get(task, {}))
+            for model in group.models:
+                if model.task != task:
+                    raise ValueError(f"Model {model.id} does not belong in {task}")
+            normalized[default_key] = group.default_model
+            normalized["models"].extend(group.models)
+        return normalized
 
     @model_validator(mode="after")
     def unique_models(self):
@@ -178,7 +212,38 @@ class ModelRegistry:
             "default_model": self.config.default_model,
             "default_detection_model": self.config.default_detection_model,
             "models": items,
+            "missing_dependencies": missing_inference_dependencies(),
         }
+
+    def startup_warnings(self) -> list[str]:
+        status = self.describe()
+        warnings = []
+        for task, key in (
+            ("segmentation", "default_model"),
+            ("detection", "default_detection_model"),
+        ):
+            selected = next((m for m in status["models"] if m["id"] == status[key]), None)
+            if selected is None:
+                warnings.append(
+                    f"No {task} model is configured. Update models.json and Reload in Models. "
+                    "Manual annotation remains available."
+                )
+            elif not selected["available"]:
+                warnings.append(
+                    f"Default {task} model {selected['id']} was not found locally. "
+                    "Check the model directory in models.json, "
+                    "then Reload in Models. No weights will be downloaded. "
+                    "Manual annotation remains available."
+                )
+        if status["missing_dependencies"]:
+            warnings.append(
+                "Inference dependencies missing: "
+                + ", ".join(status["missing_dependencies"])
+                + '. Install with python -m pip install "annodesk[inference]" '
+                "(or uv sync --extra inference in the repository), then restart. "
+                "Manual annotation remains available."
+            )
+        return warnings
 
     def print_json(self):
         print(json.dumps(self.describe(), indent=2))

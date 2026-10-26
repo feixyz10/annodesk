@@ -15,12 +15,13 @@ def test_cli_help_does_not_import_torch():
     assert "serve" in result.stdout
     assert "doctor" in result.stdout
     assert "build-ui" not in result.stdout
+    assert "{serve,segment,detect,boxes-from-masks,ui,models,doctor,docs}" in result.stdout
     assert "Start the workbench with serve" in result.stdout
 
 
 @pytest.mark.parametrize(
     "command",
-    ["serve", "segment", "detect", "boxes-from-masks", "api", "ui", "models", "doctor", "docs"],
+    ["serve", "segment", "detect", "boxes-from-masks", "ui", "models", "doctor", "docs"],
 )
 def test_user_command_help_remains_lazy(command):
     code = """
@@ -143,3 +144,145 @@ def test_project_state_and_errors_cannot_be_cached():
         response = client.get(path)
         assert response.status_code == status
         assert response.headers.get("cache-control") == "no-store"
+
+
+@pytest.mark.parametrize(
+    ("command", "explanations"),
+    [
+        (
+            "serve",
+            ["start without a project", "ANNODESK_MODELS_CONFIG", "~/.cache/annodesk", "0.0.0.0"],
+        ),
+        ("ui", ["without /api/v1", "reachable from the user's browser", "Backend logs remain"]),
+        (
+            "segment",
+            [
+                "segmentation.default_model",
+                "CUDA_VISIBLE_DEVICES",
+                "one worker per selected CUDA device",
+                "Not reviewed",
+            ],
+        ),
+        (
+            "detect",
+            [
+                "detection.default_model",
+                "consider all model classes",
+                "preserves existing annotations",
+                "Non-maximum suppression",
+            ],
+        ),
+        (
+            "boxes-from-masks",
+            [
+                "create only missing boxes",
+                "locked instances are always skipped",
+                "~/.cache/annodesk",
+            ],
+        ),
+        ("models", ["ANNODESK_MODELS_CONFIG", "creates no log files"]),
+        ("docs", ["print the installed guide to the terminal", "never overwritten"]),
+    ],
+)
+def test_cli_help_explains_parameters_and_omitted_values(command, explanations):
+    result = subprocess.run(
+        [sys.executable, "-m", "annodesk", command, "--help"], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    text = " ".join(result.stdout.replace("│", " ").split())
+    for explanation in explanations:
+        assert explanation in text
+    if command == "models":
+        assert "--log-dir" not in text and "--log-level" not in text
+
+
+@pytest.mark.parametrize(
+    ("command", "explanations"),
+    [
+        (
+            "serve",
+            [
+                "computer that reads/writes the dataset",
+                "http://SERVER_IP:8765",
+                "No separate ui command is needed",
+                "remote inference is not supported",
+            ],
+        ),
+        (
+            "ui",
+            [
+                "http://127.0.0.1:8080",
+                "browser calls --api-url directly",
+                "ui does not open local datasets",
+                "serve already provides both",
+            ],
+        ),
+    ],
+)
+def test_deployment_help_explains_machine_roles_and_browser_addresses(command, explanations):
+    result = subprocess.run(
+        [sys.executable, "-m", "annodesk", command, "--help"], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    text = " ".join(result.stdout.replace("│", " ").split())
+    for explanation in explanations:
+        assert explanation in text
+
+
+def test_separate_ui_does_not_own_the_browsers_local_dataset(tmp_path, monkeypatch):
+    from PIL import Image
+
+    server = tmp_path / "server-dataset"
+    local = tmp_path / "local-dataset"
+    for directory in (server, local):
+        (directory / "images").mkdir(parents=True)
+        Image.new("RGB", (12, 8)).save(directory / "images/a.png")
+    monkeypatch.chdir(local)
+    with TestClient(create_app(mode="api", project=server)) as api_client:
+        with TestClient(create_app(mode="ui", api_url="http://gpu-server:8765")) as ui_client:
+            assert ui_client.get("/").status_code == 200
+            assert (
+                ui_client.get("/ui-config.json").json()["apiBase"]
+                == "http://gpu-server:8765/api/v1"
+            )
+            assert ui_client.get("/api/v1/project").status_code == 404
+            assert api_client.get("/").status_code == 404
+            assert api_client.get("/api/v1/project").json()["root"] == str(server)
+            assert not (local / ".annodesk").exists()
+
+
+@pytest.mark.parametrize("api_only", [False, True])
+def test_serve_api_only_controls_page_hosting(tmp_path, monkeypatch, api_only):
+    from annodesk.cli import serve
+
+    def run(app, host, port):
+        assert (host, port) == ("127.0.0.1", 8765)
+        with TestClient(app) as client:
+            assert client.get("/api/v1/info").status_code == 200
+            assert client.get("/").status_code == (404 if api_only else 200)
+            assert client.get("/ui-config.json").status_code == (404 if api_only else 200)
+
+    monkeypatch.setattr("annodesk.cli._run_server", run)
+    serve(api_only=api_only, log_dir=tmp_path / "logs")
+
+
+def test_api_only_cannot_open_a_nonexistent_workbench(monkeypatch):
+    from annodesk.cli import serve
+
+    monkeypatch.setattr("annodesk.cli.webbrowser.open", lambda *_: pytest.fail("Browser opened"))
+    monkeypatch.setattr("annodesk.cli._logging", lambda *_: pytest.fail("Logging initialized"))
+    with pytest.raises(SystemExit, match="--open cannot be combined with --api-only"):
+        serve(api_only=True, open=True)
+
+
+def test_removed_api_command_explains_replacement_in_help():
+    rejected = subprocess.run(
+        [sys.executable, "-m", "annodesk", "api"], capture_output=True, text=True
+    )
+    assert rejected.returncode == 2
+    result = subprocess.run(
+        [sys.executable, "-m", "annodesk", "serve", "--help"], capture_output=True, text=True
+    )
+    assert result.returncode == 0
+    text = " ".join(result.stdout.replace("│", " ").split())
+    assert "--api-only" in text and "without a workbench page" in text

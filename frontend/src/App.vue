@@ -39,6 +39,7 @@ import Icon from "./components/Icon.vue";
 import FastTooltip from "./components/FastTooltip.vue";
 import ClassPicker from "./components/ClassPicker.vue";
 import StatisticsBar from "./components/StatisticsBar.vue";
+import ModelNotice from "./components/ModelNotice.vue";
 import LogDrawer from "./components/LogDrawer.vue";
 const ModelSettings = defineAsyncComponent(
   () => import("./components/ModelSettings.vue"),
@@ -561,6 +562,15 @@ onBeforeUnmount(() => {
           {{ t("Retry save") }}
         </button>
       </div>
+      <ModelNotice
+        :config="store.models"
+        :task="store.task"
+        :model-id="
+          store.task === 'detection' ? store.detectionModel : store.model
+        "
+        settings-button
+        @settings="modelSettings = true"
+      />
       <main
         class="workspace"
         :style="{ '--left': left + 'px', '--right': right + 'px' }"
@@ -605,7 +615,6 @@ onBeforeUnmount(() => {
           <div class="canvasbar">
             <button
               class="model-summary"
-              :disabled="!store.meta"
               :title="t('Choose a model, load it, and configure inference')"
               @click="modelSettings = true"
             >

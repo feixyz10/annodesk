@@ -14,7 +14,9 @@ Tasks改为居中非模态任务窗（约900px，最大90vw/80vh），不遮罩�
 
 ## 2. 检测模型与类别来源
 
-models.json的模型条目增加task=detection|segmentation、backend=ultralytics，以及可选classes_file；旧SAM条目自动属于segmentation。default_model继续指SAM，新增可选default_detection_model。仅有det条目的配置也合法，但不得把det模型用于SAM提示。
+0.2.2预设检测为随包的YOLO11n COCO 80类权重；它仍须通过严格项目类别检查，不因默认模型而自动新增或重映射类别。权重存在与推理依赖安装状态独立，启动和页面分别提醒；其他配置语义保持不变。
+
+models.json新格式按segmentation/detection对称分组，各组有default_model和models；模型条目保留backend及可选classes_file，task由分组确定。旧顶层扁平格式（default_model/default_detection_model/models）继续兼容，但不能混用两种结构；旧SAM条目自动属于segmentation。仅有det配置也合法，不得把det模型用于SAM提示。
 
 source依然精确到模型目录，目录内必须有唯一兼容.pt，禁止下载。classes_file支持JSON/YAML，使用names数组或ID到名称的字典，非空、名称非空且唯一、ID为连续0..nc-1；相对models.json解析，不尝试HF_MODELS。
 
@@ -45,6 +47,10 @@ Boxes from masks：选中实例、当前图、批量都可用。纯几何计算�
 Resume延续原任务范围/配置，不受当前筛选和参数影响；checkpoint或类别表变化不能静默恢复。新批次重新计算。检测任务运行期间禁止手动新增、改名和重排类别（颜色可调整）；恢复校验项目类别快照，允许本任务此前成功保存所引入的类别。排队期间变为不符合审核筛选的图片拒绝处理并计入失败，保留人工决定。F/T图片进度与boxes_added/dropped等实例计数分开；成功必须在协调者保存后计数。取消、保存冲突、worker崩溃、项目写锁沿用0.2约定。批处理/导出活动期（含取消后等待在途worker）拒绝回收站清理及恢复，任务启动与回收站操作互斥；批次报告冻结图片路径，图片被外部移除只计该图片失败，不丢失错误明细或中断其余图片。
 
 ## 6. API与CLI
+
+serve（含--api-only）拥有数据集读写、模型与推理；ui只是独立网页主机，浏览器直接连接API。普通服务器使用serve即可由本机浏览器远程标注；本机数据集上传至远端纯推理服务的能力尚未实现。help与用户指南须明确运行电脑及浏览器访问地址。
+
+0.2.2补齐逐参数说明，包括None/auto默认行为、类别筛选及追加策略；只读models list不再暴露无效日志选项。
 
 0.2.1整理CLI帮助用途和顺序，移除仅开发使用的build-ui；此处三类用户批处理命令及参数保持不变。
 

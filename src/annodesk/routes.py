@@ -57,6 +57,8 @@ def project_routes(
     try:
         current = Project(initial) if initial else None
         registry = ModelRegistry(models_config)
+        for message in registry.startup_warnings():
+            events.emit("WARNING", message, event_type="model_setup")
     except BaseException:
         if lease:
             lease.close()

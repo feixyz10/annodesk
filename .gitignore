@@ -25,3 +25,6 @@ frontend/dist/
 *.safetensors
 *.pt
 *.pth
+
+# Deliberately bundled default detector; all other model weights stay ignored.
+!assets/models/yolo11n/yolo11n.pt

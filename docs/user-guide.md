@@ -2,7 +2,7 @@
 
 AnnoDesk 用于标注图像中的检测框和实例分割 mask，可导入已有 YOLO 检测标签，再根据框生成分割结果并人工复核。界面支持英文和简体中文，采用浅色主题，在浏览器中使用；图片、模型和标注数据保存在运行后端的电脑上。
 
-版本：0.2.1。
+版本：0.2.2。
 
 ## 1. 安装
 
@@ -24,24 +24,26 @@ Windows PowerShell 激活环境：
 .\.venv\Scripts\Activate.ps1
 ```
 
-从 PyPI 安装此版本：
+使用本地发布包安装（离线环境需提前准备依赖）：
 
 ```sh
-python -m pip install "annodesk==0.2.1"
+python -m pip install ./annodesk-0.2.2-py3-none-any.whl
 ```
 
-使用本地 wheel 安装（离线环境需提前准备依赖）：
+版本上架 PyPI 后，也可通过包名安装：
 
 ```sh
-python -m pip install ./annodesk-0.2.1-py3-none-any.whl
+python -m pip install "annodesk==0.2.2"
 ```
 
 基础安装即可使用框标注、类别、审核状态和数据管理。若需要 SAM 或检测模型推理，显式安装可选依赖：
 
 ```sh
-python -m pip install "annodesk[inference]==0.2.1"
+python -m pip install "./annodesk-0.2.2-py3-none-any.whl[inference]"
 annodesk doctor
 ```
+
+从 PyPI 安装时使用 `"annodesk[inference]==0.2.2"`。
 
 `doctor` 只检查 torch / ultralytics 是否安装，不验证权重、显卡驱动或推理结果。PyTorch 的 GPU 环境需根据实际机器自行准备；SAM 3 文本推理还需要对应的本地 tokenizer / runtime 依赖。
 
@@ -50,10 +52,10 @@ annodesk doctor
 升级时先停止服务并备份整个项目，尤其是 `.annodesk/`，再执行：
 
 ```sh
-python -m pip install --upgrade "annodesk==0.2.1"
+python -m pip install --upgrade ./annodesk-0.2.2-py3-none-any.whl
 ```
 
-需要推理功能时使用 `"annodesk[inference]==0.2.1"`。升级后重启服务并刷新页面，已有标注保留原审核状态。
+需要推理功能时在 wheel 路径后加 `[inference]`；通过 PyPI 升级时使用相应包名及版本。升级后重启服务并刷新页面，已有标注保留原审核状态。
 
 ## 2. 启动和打开数据集
 
@@ -120,37 +122,60 @@ labels_seg/train/camera_a/001.txt
 
 ## 4. 配置本地模型
 
-创建自己的 `models.json`，例如：
+无需指定 `--models-config` 即可使用预设配置：
+
+- 分割默认 `facebook/sam2.1-hiera-tiny`（SAM 2.1 Tiny）。其他 SAM 2.1 规格、MobileSAM 和 SAM 3 也提供 repo ID 形式的预设。
+- 检测默认 `yolo11n`（COCO 80 类）。权重已随安装包提供；推理依赖仍需显式安装。
+- SAM 权重不随包提供，也不会自动下载。将兼容权重放到 `$HF_MODELS/facebook/sam2.1-hiera-tiny/`，例如 `sam2.1_hiera_tiny.pt`。仅有 `model.safetensors` 不能用于当前推理。
+
+```sh
+export HF_MODELS=/srv/models
+annodesk models list
+annodesk serve --project /data/my-dataset --open
+```
+
+Windows PowerShell 使用 `$env:HF_MODELS = "D:\models"`。`HF_MODELS` 是包含 `facebook/` 等目录的根目录，而非 `.pt` 文件或某个单独模型目录。
+
+启动时若找不到默认模型或未安装推理依赖，终端会显示警告；页面按当前 Detection / Segmentation 任务展示准备提示，点击 **Open Models** 查看设置。仍可手工标注。准备好权重后点击 **Reload configuration**；若刚安装依赖，请重启后端。只有权重可用不代表依赖、设备和类别检查均通过。
+
+需要自定义配置时，创建 `models.json`，例如：
 
 ```json
 {
-  "default_model": "sam2-small",
-  "default_detection_model": "detector",
-  "models": [
-    {
-      "id": "sam2-small",
-      "name": "SAM 2.1 Small",
-      "backend": "sam2",
-      "source": "facebook/sam2.1-hiera-small"
-    },
-    {
-      "id": "mobile",
-      "name": "MobileSAM",
-      "backend": "mobile_sam",
-      "source": "/srv/models/MobileSAM"
-    },
-    {
-      "id": "detector",
-      "name": "My detector",
-      "backend": "ultralytics",
-      "task": "detection",
-      "source": "/srv/models/my-detector"
-    }
-  ]
+  "segmentation": {
+    "default_model": "facebook/sam2.1-hiera-tiny",
+    "models": [
+      {
+        "id": "facebook/sam2.1-hiera-tiny",
+        "name": "SAM 2.1 Tiny",
+        "backend": "sam2",
+        "source": "facebook/sam2.1-hiera-tiny"
+      },
+      {
+        "id": "dhkim2810/MobileSAM",
+        "name": "MobileSAM",
+        "backend": "mobile_sam",
+        "source": "/srv/models/MobileSAM"
+      }
+    ]
+  },
+  "detection": {
+    "default_model": "detector",
+    "models": [
+      {
+        "id": "detector",
+        "name": "My detector",
+        "backend": "ultralytics",
+        "source": "/srv/models/my-detector"
+      }
+    ]
+  }
 }
 ```
 
-- `id`：唯一标识，供 `--model` 和默认模型引用。
+配置分为 `segmentation` 和 `detection` 两组，各自拥有 `default_model` 与 `models`。默认 ID 必须属于该组；省略时选用组内第一个模型。只使用一种任务时可省略另一组。
+
+- `id`：唯一标识，供 `--model` 和默认模型引用。预设分割模型使用完整 repo ID，以区分模型规格；自定义配置仍允许其他唯一名称。
 - `name`：页面显示名称。
 - `backend`：`sam`、`sam2`、`mobile_sam`、`sam3`，检测使用 `ultralytics`。
 - `source`：模型的最终一级文件夹，不填写 `.pt` / `.safetensors` 文件，也不填写 `checkpoint` 字段。
@@ -190,9 +215,11 @@ annodesk serve --project /data/my-dataset --models-config ./models.json
 
 配置查找优先级：`--models-config` > `ANNODESK_MODELS_CONFIG` 环境变量 > 当前目录 `models.json` > 安装包内置默认。
 
-建议始终显式传入自己的配置文件。画布工具栏的模型入口打开居中 **Model settings** 窗口，分 Detection / Segmentation。**Available** 表示目录/权重可用，**Loaded** 表示模型已加载，二者不同。**Reload** 重新读取配置，**Check classes** 检查检测类别兼容，**Load** 显式加载到所选设备；**Apply** 保存项目/模型参数，**Cancel** 丢弃未应用参数，但不会撤销已经执行的 Load。悬停不展示路径，主动展开 Diagnostics 或运行 CLI 可查看详细错误。模型目录存在不代表依赖已安装。SAM 切换加载失败时，可直接重试或切回原模型重新加载，无需重启后端。
+使用自定义配置时，建议显式传入 `--models-config`；它会替换预设配置，不会与预设自动合并。画布工具栏的模型入口打开居中 **Model settings** 窗口，分 Detection / Segmentation。**Available** 表示目录/权重可用，**Loaded** 表示模型已加载，二者不同。**Reload** 重新读取配置，**Check classes** 检查检测类别兼容，**Load** 显式加载到所选设备；**Apply** 保存项目/模型参数，**Cancel** 丢弃未应用参数，但不会撤销已经执行的 Load。悬停不展示路径，主动展开 Diagnostics 或运行 CLI 可查看详细错误。模型目录存在不代表依赖已安装。SAM 切换加载失败时，可直接重试或切回原模型重新加载，无需重启后端。
 
 ### 检测类别与项目兼容
+
+旧版顶层 `default_model`、`default_detection_model` 和 `models` 配置仍可读取；不要与分组格式混写。同一文件中的模型 ID 必须全局唯一，未知字段或任务与 backend 不匹配时会报错。
 
 标准 Ultralytics 检测 `.pt` 通常带有类别名称（参见[官方预测说明](https://docs.ultralytics.com/modes/predict/)）。缺少可靠名称或只有 `class_0` 等占位名时，在模型条目中增加 `"classes_file": "detector-classes.yaml"`，例如：
 
@@ -312,10 +339,10 @@ YOLO polygon 无法完整保留孔洞等结构，请备份原始项目及 `.anno
 ## 6. 不打开页面，直接将检测框批量分割
 
 ```sh
-annodesk segment --project /data/my-dataset --models-config ./models.json --model sam2-small
+annodesk segment --project /data/my-dataset --models-config ./models.json --model facebook/sam2.1-hiera-tiny
 ```
 
-省略 `--model` 使用 JSON 中的 `default_model`。该命令不启动 HTTP 服务或浏览器。
+省略 `--model` 使用 `segmentation.default_model`；检测命令对应 `detection.default_model`。该命令不启动 HTTP 服务或浏览器。
 
 - 保留 detection 框及类别，分割写入 `labels_seg/`，内部保存无损 RLE。
 - 默认只处理 Segmentation 的 Not reviewed；跳过已有 mask、锁定实例和 Excluded 图片。
@@ -346,7 +373,7 @@ mask 转框不需要可用模型或 Torch；`--recalculate-boxes` 允许替换�
 
 ```sh
 CUDA_VISIBLE_DEVICES=2,5 annodesk segment --project /data/my-dataset \
-  --models-config ./models.json --model sam2-small \
+  --models-config ./models.json --model facebook/sam2.1-hiera-tiny \
   --device-type cuda --devices 0,1 --num-workers 3
 ```
 
@@ -356,7 +383,7 @@ CUDA_VISIBLE_DEVICES=2,5 annodesk segment --project /data/my-dataset \
 
 ### 日志
 
-`serve`、`api`、`ui`、`segment`、`detect`、`boxes-from-masks` 为每次运行创建日志，默认 `~/.cache/annodesk/YYYY-MM-DD_HHMMSS_ffffff.log`（包括 macOS）。可通过 `--log-dir /path/to/logs --log-level DEBUG` 修改目录和文件/终端等级，默认 INFO，20MB轮转，保留14天。目录不可写时会警告并继续使用终端与内存日志，不影响标注保存。查询 help/docs/doctor/models 不创建日志文件。
+`serve`、`serve --api-only`、`ui`、`segment`、`detect`、`boxes-from-masks` 为每次运行创建日志，默认 `~/.cache/annodesk/YYYY-MM-DD_HHMMSS_ffffff.log`（包括 macOS）。可通过 `--log-dir /path/to/logs --log-level DEBUG` 修改目录和文件/终端等级，默认 INFO，20MB轮转，保留14天。目录不可写时会警告并继续使用终端与内存日志，不影响标注保存。查询 help/docs/doctor/models 不创建日志文件。
 
 页面 **Logs** 抽屉宽度可拖动，未打开项目也可用。显示时间、等级和重要信息，包含模型、设备、worker READY、任务状态及错误，不显示文件名、行号或异常堆栈。选择 Service 或 Current project；等级可切换 `=`（仅该等级）或 `≥`（该等级及以上），包括 SUCCESS。支持暂停/恢复、自动滚动开关、清空视图、复制当前视图和下载当前日志文件。普通轮询、逐框推理和 autosave 不刷屏，同类错误会合并显示，文件和报告保留原始错误。
 
@@ -384,23 +411,63 @@ CUDA_VISIBLE_DEVICES=2,5 annodesk segment --project /data/my-dataset \
 | 保存 | Ctrl+S or ⌘S |
 | 查看快捷键 | ? |
 
-## 8. 前后端分开部署
+## 8. 运行位置与浏览器访问地址
 
-在保存图片、标签及模型的电脑上：
+数据集路径由 **运行 `serve`（包括 `--api-only`）的后端电脑**解析。图片、标签、项目记录和模型必须在该电脑上，或位于它可读写的共享/挂载目录。选择项目时输入的是后端路径，保存标注也写回那里。
+
+| 命令 | 在哪台电脑运行 | 提供什么 | 浏览器访问 |
+| --- | --- | --- | --- |
+| `serve` | 保存数据集、运行推理的电脑 | 后端 API 和标注网页 | 同机用 `http://127.0.0.1:8765`；其他电脑用 `http://服务器IP:8765` |
+| `serve --api-only` | 保存数据集、运行推理的电脑 | 仅后端 API，不提供标注网页 | 在另一处部署网页，访问那个网页的地址 |
+| `ui` | 提供网页的电脑，可以是本机 | 网页及后端地址配置 | 在这台电脑用 `http://127.0.0.1:8080`；网页直接请求 `--api-url` 指定的后端 |
+
+### 同一台电脑完成标注和推理
+
+在数据集所在电脑执行：
 
 ```sh
-annodesk api --host 0.0.0.0 --port 8765 --models-config /config/models.json
+annodesk serve --project /data/my-dataset --open
 ```
 
-在提供前端页面的电脑上（同样安装 AnnoDesk）：
+浏览器访问 `http://127.0.0.1:8765`。`--open` 打开的是执行命令这台电脑上的浏览器。
+
+### GPU 服务器运行完整服务，本机浏览器访问（推荐）
+
+在 GPU 服务器执行：
 
 ```sh
-annodesk ui --api-url http://gpu-host:8765 --port 8080
+annodesk serve --host 0.0.0.0 --port 8765 --project /srv/datasets/my-dataset
 ```
 
-浏览器打开 `http://前端电脑:8080`。如果需要让其他电脑访问前端，请为 `ui` 增加 `--host 0.0.0.0`。`gpu-host` 必须能从浏览器所在电脑访问。
+在自己的电脑上打开浏览器，访问 `http://服务器IP:8765`。不需要在本机另运行 `ui`；服务器已经提供网页。示例中的 `/srv/datasets/my-dataset`、模型目录和 `HF_MODELS` 都属于服务器。
 
-所有数据路径、模型配置和 `HF_MODELS` 以 API 电脑为准，浏览器电脑上的目录不会自动上传。当前版本没有认证，HTTP 部署限于可信网络。
+### 独立托管网页，后端运行在 GPU 服务器
+
+仅在需要独立部署网页、前后端开发，或用其他客户端调用 API 时，才需要拆分运行。使用 `serve --api-only` 只托管 API；不能同时使用 `--open`。
+
+在 GPU 服务器执行：
+
+```sh
+annodesk serve --api-only --host 0.0.0.0 --port 8765 --project /srv/datasets/my-dataset
+```
+
+在本机执行（同样安装 AnnoDesk）：
+
+```sh
+annodesk ui --api-url http://服务器IP:8765 --port 8080
+```
+
+本机浏览器访问 `http://127.0.0.1:8080`。网页会直接请求 `http://服务器IP:8765/api/v1`，因此服务器地址必须能从浏览器所在电脑访问。`ui` 只提供网页，不代理数据集读写，也不承担推理。
+
+如需让其他电脑访问这个 `ui` 网页，在 `ui` 命令中增加 `--host 0.0.0.0`，并使用 `http://网页电脑IP:8080`。`0.0.0.0` 是监听地址，不是浏览器要访问的服务器地址；`127.0.0.1` 始终指浏览器或命令所在的本机。
+
+### 本地数据集能否只借用服务器算力？
+
+**当前不支持“在本机打开数据集，切图时上传图片和提示，服务器返回结果，由本机保存”的远程推理模式。** 将 `serve --api-only` 放在服务器、`ui` 放在本机，并不会实现这种功能。此时仍由服务器读取和保存数据集。
+
+若数据集暂时保存在本机，可先同步到服务器，或将目录通过共享/挂载提供给服务器，并使用服务器看到的可读写路径。本机浏览器中的路径不会自动上传或映射。
+
+从源码环境运行以上命令时，在命令前加 `uv run`，例如 `uv run annodesk serve`；执行位置和数据归属不变。当前服务没有认证，HTTP 部署限于可信网络。
 
 ## 9. 常见问题
 
@@ -422,13 +489,24 @@ annodesk ui --api-url http://gpu-host:8765 --port 8080
 
 ## 10. 命令与帮助
 
+所有命令的 `--help` 均说明参数用途和省略后的行为。帮助中的 `(default: None)` 表示没有显式提供该可选值；通常直接省略参数即可，不必填写 `None`。
+
+| 参数 | 省略时的行为 |
+| --- | --- |
+| `serve --project` | 先启动服务，不打开项目；之后在页面打开 |
+| `--models-config` | 依次查找环境变量 `ANNODESK_MODELS_CONFIG`、当前目录 `models.json`、默认预设 |
+| `--log-dir` | 日志存入 `~/.cache/annodesk/` |
+| `docs --output` | 将指南输出到终端，不创建文件 |
+| `detect --model-classes` | 考虑全部模型类别，仍受项目类别兼容规则约束 |
+| `segment/detect --model` | 使用配置中对应任务的默认模型 |
+
 | 用途 | 命令 |
 | --- | --- |
 | 启动完整工作台 | `annodesk serve` |
 | 按已有框批量分割 | `annodesk segment` |
 | 批量生成检测框 | `annodesk detect` |
 | 从 mask 生成框 | `annodesk boxes-from-masks` |
-| 分机部署后端 / 前端 | `annodesk api` / `annodesk ui` |
+| 分机部署后端 / 前端 | `annodesk serve --api-only` / `annodesk ui` |
 | 查看本地模型配置 | `annodesk models list` |
 | 检查推理依赖是否安装 | `annodesk doctor` |
 | 阅读或保存指南 | `annodesk docs` |
@@ -443,3 +521,7 @@ annodesk boxes-from-masks --help
 ```
 
 `annodesk docs` 输出随当前安装版本发布的本指南；`--output` 导出 Markdown，目标文件已存在时不会覆盖。升级安装包后，可用该命令获取对应版本的说明。
+
+## 11. 许可证
+
+AnnoDesk 原创源码采用 MIT 许可证。随包提供的 YOLO11n 权重来自 Ultralytics，保留其原有许可与来源说明，不属于 MIT 授权范围。其他模型和依赖也分别适用各自许可证。
