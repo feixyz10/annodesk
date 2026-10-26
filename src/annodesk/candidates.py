@@ -16,6 +16,7 @@ from annodesk.storage import RevisionConflict
 class CandidateRequest(SegmentRequest):
     expected_revision: int = Field(ge=0)
     project_id: str
+    multimask_output: bool = True
 
 
 class CandidateApply(BaseModel):
@@ -72,11 +73,19 @@ def preview_candidates(project, image_id, body, adapter):
         color = next(
             (c["color"] for c in project.metadata["classes"] if c["id"] == obj.class_id), "#657286"
         )
-    if not callable(getattr(adapter, "predict_candidates", None)):
-        raise ValueError("This model adapter does not support mask candidates")
-    predictions = adapter.predict_candidates(
-        project.image_path(image_id), body.model, obj.prompt_box or obj.box, obj.points
-    )
+    if body.multimask_output:
+        if not callable(getattr(adapter, "predict_candidates", None)):
+            raise ValueError("This model adapter does not support mask candidates")
+        predictions = adapter.predict_candidates(
+            project.image_path(image_id), body.model, obj.prompt_box or obj.box, obj.points
+        )
+    else:
+        predictions = [
+            (mask, None)
+            for mask in adapter.predict(
+                project.image_path(image_id), body.model, obj.prompt_box or obj.box, obj.points, ""
+            )[:1]
+        ]
     valid = []
     for mask, score in predictions:
         if mask.shape != (height, width):

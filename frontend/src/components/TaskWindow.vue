@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t, statusLabel, taskLabel, formatDate } from "../i18n";
-import { computed, ref, watch, nextTick } from "vue";
+import { computed, ref, watch } from "vue";
+import { NModal } from "naive-ui";
 import { type Job, elapsed } from "../tasks";
 import TaskProgress from "./TaskProgress.vue";
 const props = defineProps<{
@@ -15,17 +16,6 @@ const emit = defineEmits<{
   logs: [];
 }>();
 const expanded = ref("");
-const panel = ref<HTMLElement>();
-let previousFocus: HTMLElement | null = null;
-watch(
-  () => props.show,
-  (show) => {
-    if (show) {
-      previousFocus = document.activeElement as HTMLElement;
-      void nextTick(() => panel.value?.focus());
-    } else if (previousFocus?.isConnected) previousFocus.focus();
-  },
-);
 function title(job: Job) {
   return job.kind === "export"
     ? "Export"
@@ -62,326 +52,284 @@ function toggle(event: Event, id: string) {
 }
 </script>
 <template>
-  <Teleport to="body">
-    <section
-      v-if="show"
-      ref="panel"
-      tabindex="-1"
-      role="dialog"
-      aria-modal="false"
-      aria-labelledby="tasks-title"
-      class="task-window"
-      @keydown.esc.stop="emit('update:show', false)"
-    >
-      <div class="task-window-heading">
-        <h2 id="tasks-title">{{ t("Tasks") }}</h2>
-        <button
-          :aria-label="t('Close tasks')"
-          :title="t('Close task window; processing continues')"
-          @click="emit('update:show', false)"
-        >
-          {{ t("Close") }}
-        </button>
-      </div>
-      <div class="task-window-body">
-        <p class="muted">
-          {{
-            t(
-              "Closing this window keeps tasks running. Reopen Tasks in the toolbar to check progress.",
-            )
-          }}
-        </p>
-        <p v-if="!jobs.length">
-          {{
-            t(
-              "No tasks yet. Start Batch processing or Export from the toolbar.",
-            )
-          }}
-        </p>
-        <details
-          v-for="job in sorted"
-          :key="job.id"
-          :open="job.id === expanded"
-          @toggle="toggle($event, job.id)"
-          class="task-card"
-        >
-          <summary>
-            <strong>{{ t(title(job)) }}</strong
-            ><span class="task-status" :class="job.status">{{
-              statusLabel(job.status)
-            }}</span
-            ><span>{{
-              t("{completed}/{total} finished", {
-                completed: job.completed,
-                total: job.total,
-              })
-            }}</span>
-          </summary>
-          <div class="task-body">
-            <dl class="task-meta">
-              <dt>{{ t("Started") }}</dt>
-              <dd>
-                {{
-                  job.started_at
-                    ? formatDate(job.started_at)
-                    : t("Earlier session")
-                }}
-              </dd>
-              <dt>{{ t("Elapsed") }}</dt>
-              <dd>{{ elapsed(job) }}</dd>
-              <dt>{{ t("Task ID") }}</dt>
-              <dd>{{ job.id }}</dd>
-            </dl>
-            <TaskProgress
-              :completed="job.completed"
-              :total="job.total"
-              :phase="job.phase || job.status"
-              :running="job.status === 'running'"
-            />
-            <div v-if="job.kind !== 'export'" class="task-counts">
-              <span
-                ><b>{{ job.processed || 0 }}</b
-                >{{ t("Succeeded") }}</span
-              ><span
-                ><b>{{ job.failed.length }}</b
-                >{{ t("Failed") }}</span
-              ><span
-                ><b>{{ job.skipped }}</b
-                >{{ t("Skipped") }}</span
-              ><span
-                ><b>{{ job.remaining?.length || 0 }}</b
-                >{{ t("Remaining") }}</span
-              >
-            </div>
-            <p
-              v-if="job.kind === 'detection' || job.kind === 'boxes_from_masks'"
-              class="muted"
+  <NModal
+    :show="show"
+    @update:show="emit('update:show', $event)"
+    preset="card"
+    :title="t('Tasks')"
+    class="task-window"
+    style="
+      width: 900px;
+      max-width: 92vw;
+      max-height: 85vh;
+      overflow: hidden;
+      resize: both;
+    "
+    content-style="overflow:auto;min-height:0"
+  >
+    <div class="task-window-body">
+      <p class="muted">
+        {{
+          t(
+            "Closing this window keeps tasks running. Reopen Tasks in the toolbar to check progress.",
+          )
+        }}
+      </p>
+      <p v-if="!jobs.length">
+        {{
+          t("No tasks yet. Start Batch processing or Export from the toolbar.")
+        }}
+      </p>
+      <details
+        v-for="job in sorted"
+        :key="job.id"
+        :open="job.id === expanded"
+        @toggle="toggle($event, job.id)"
+        class="task-card"
+      >
+        <summary>
+          <strong>{{ t(title(job)) }}</strong
+          ><span class="task-status" :class="job.status">{{
+            statusLabel(job.status)
+          }}</span
+          ><span>{{
+            t("{completed}/{total} finished", {
+              completed: job.completed,
+              total: job.total,
+            })
+          }}</span>
+        </summary>
+        <div class="task-body">
+          <dl class="task-meta">
+            <dt>{{ t("Started") }}</dt>
+            <dd>
+              {{
+                job.started_at
+                  ? formatDate(job.started_at)
+                  : t("Earlier session")
+              }}
+            </dd>
+            <dt>{{ t("Elapsed") }}</dt>
+            <dd>{{ elapsed(job) }}</dd>
+            <dt>{{ t("Task ID") }}</dt>
+            <dd>{{ job.id }}</dd>
+          </dl>
+          <TaskProgress
+            :completed="job.completed"
+            :total="job.total"
+            :phase="job.phase || job.status"
+            :running="job.status === 'running'"
+          />
+          <div v-if="job.kind !== 'export'" class="task-counts">
+            <span
+              ><b>{{ job.processed || 0 }}</b
+              >{{ t("Succeeded") }}</span
+            ><span
+              ><b>{{ job.failed.length }}</b
+              >{{ t("Failed") }}</span
+            ><span
+              ><b>{{ job.skipped }}</b
+              >{{ t("Skipped") }}</span
+            ><span
+              ><b>{{ job.remaining?.length || 0 }}</b
+              >{{ t("Remaining") }}</span
             >
-              {{
-                t(
-                  "{added} boxes added · {updated} boxes updated · {discarded} detections discarded · {classes} classes added",
-                  {
-                    added: job.boxes_added || 0,
-                    updated: job.boxes_updated || 0,
-                    discarded: job.detections_discarded || 0,
-                    classes: job.classes_added || 0,
-                  },
-                )
-              }}
-            </p>
-            <p v-if="job.kind === 'export'">
-              {{ job.completed }}/{{ job.total }}
-              {{
-                t(
-                  "images inspected. Exported and skipped totals appear in the final report.",
-                )
-              }}
-            </p>
-            <p v-if="!job.total && job.status === 'complete'">
-              {{
-                job.kind === "export"
-                  ? t("No images to export")
-                  : t("No images require processing")
-              }}
-            </p>
-            <section v-if="job.model || job.request" class="task-section">
-              <h3>{{ t("Execution settings") }}</h3>
-              <dl class="task-meta">
-                <template v-if="job.kind !== 'export'"
-                  ><dt>{{ t("Model") }}</dt>
-                  <dd>
-                    {{
-                      job.kind === "boxes_from_masks"
-                        ? t("None (CPU geometry)")
-                        : job.model || job.request?.model || t("Default")
-                    }}
-                  </dd>
-                  <dt v-if="job.plan">{{ t("Devices") }}</dt>
-                  <dd v-if="job.plan">
-                    {{ job.plan.devices.join(", ") }}
-                  </dd></template
-                ><template v-else
-                  ><dt>{{ t("Task / format") }}</dt>
-                  <dd>
-                    {{ taskLabel(job.request?.task || "") }} /
-                    {{ job.request?.format }}
-                  </dd></template
-                >
-                <template v-if="job.request?.review_states"
-                  ><dt>{{ t("Review states") }}</dt>
-                  <dd>
-                    {{ job.request.review_states.map(statusLabel).join(" · ") }}
-                  </dd></template
-                >
-                <template v-if="job.kind === 'detection'">
-                  <dt>{{ t("Thresholds") }}</dt>
-                  <dd>
-                    {{ t("Confidence") }} {{ job.request?.confidence }}
-                    {{ t("· NMS IoU") }}
-                    {{ job.request?.iou }}
-                  </dd>
-                  <dt>{{ t("Prediction") }}</dt>
-                  <dd>
-                    {{ t("Image size") }} {{ job.request?.imgsz }}
-                    {{ t("· Max detections") }}
-                    {{ job.request?.max_det }}
-                  </dd>
-                  <dt>{{ t("Classes") }}</dt>
-                  <dd>
-                    {{
-                      job.request?.model_classes?.join(", ") ||
-                      t("All model classes")
-                    }}
-                  </dd>
-                  <dt>{{ t("Write policy") }}</dt>
-                  <dd>{{ statusLabel(job.request?.write_policy || "") }}</dd>
-                  <dt>{{ t("New classes") }}</dt>
-                  <dd>
-                    {{
-                      job.request?.allow_new_classes
-                        ? t("Add when detected")
-                        : t("Discard outside project")
-                    }}
-                  </dd>
-                </template>
-                <template v-if="job.kind === 'boxes_from_masks'"
-                  ><dt>{{ t("Existing boxes") }}</dt>
-                  <dd>
-                    {{
-                      job.request?.recalculate_boxes
-                        ? t("Recalculate unlocked")
-                        : t("Preserve")
-                    }}
-                  </dd></template
-                >
-                <template v-if="job.request?.operation"
-                  ><dt>{{ t("Image range") }}</dt>
-                  <dd>
-                    {{
-                      job.request?.image_ids
-                        ? t("{count} selected images", {
-                            count: job.request.image_ids.length,
-                          })
-                        : t("All project images at task creation")
-                    }}
-                  </dd></template
-                >
-              </dl>
-            </section>
-            <section v-if="job.plan" class="task-section">
-              <h3>{{ t("Workers ·") }} {{ job.plan.workers.length }}</h3>
-              <div class="worker-table">
-                <div
-                  v-for="(device, index) in job.plan.workers"
-                  :key="index"
-                  class="worker-row"
-                >
-                  <strong>{{ t("Worker") }} {{ index }}</strong
-                  ><span>{{ device }}</span
-                  ><template
-                    v-if="
-                      job.active_workers?.some((w) => w.worker_id === index)
-                    "
-                    ><div
-                      v-for="worker in job.active_workers.filter(
-                        (w) => w.worker_id === index,
-                      )"
-                      :key="worker.worker_id"
-                      class="worker-image"
-                    >
-                      <span>{{ path(worker.image) }}</span
-                      ><span>{{ worker.elapsed_seconds }}{{ t("s") }}</span>
-                    </div></template
-                  ><span v-else class="muted">{{
-                    job.status !== "running"
-                      ? t("Stopped")
-                      : job.phase === "loading"
-                        ? t("Loading model…")
-                        : t("Idle")
-                  }}</span>
-                </div>
-              </div>
-            </section>
-            <section v-if="job.error || job.failed.length" class="task-section">
-              <h3>{{ t("Errors ·") }} {{ job.failed.length }}</h3>
-              <p v-if="job.error" class="task-error">{{ job.error }}</p>
-              <div class="task-failures">
-                <div v-for="(failure, index) in job.failed" :key="index">
-                  <strong>{{ path(failure.image) }}</strong>
-                  <p>{{ failure.error }}</p>
-                </div>
-              </div>
-            </section>
-            <section v-if="job.output" class="task-section">
-              <h3>{{ t("Saved on the backend") }}</h3>
-              <p class="task-output">{{ job.output }}</p>
-            </section>
-            <div class="task-actions">
-              <button
-                v-if="job.status === 'running'"
-                @click="emit('cancel', job.id)"
-              >
-                {{ t("Cancel after active images") }}</button
-              ><button
-                v-else-if="job.kind !== 'export' && job.remaining?.length"
-                @click="emit('resume', job.id)"
-              >
-                {{ t("Resume pending images") }}</button
-              ><button @click="emit('logs')">{{ t("View logs") }}</button>
-            </div>
-            <p v-if="job.kind !== 'export'" class="muted">
-              {{
-                t(
-                  "Finished = succeeded + failed. Success is counted after saving. Generated annotations still require human review.",
-                )
-              }}
-            </p>
           </div>
-        </details>
-      </div>
-    </section>
-  </Teleport>
+          <p
+            v-if="job.kind === 'detection' || job.kind === 'boxes_from_masks'"
+            class="muted"
+          >
+            {{
+              t(
+                "{added} boxes added · {updated} boxes updated · {discarded} detections discarded · {classes} classes added",
+                {
+                  added: job.boxes_added || 0,
+                  updated: job.boxes_updated || 0,
+                  discarded: job.detections_discarded || 0,
+                  classes: job.classes_added || 0,
+                },
+              )
+            }}
+          </p>
+          <p v-if="job.kind === 'export' && job.status === 'complete'">
+            {{
+              t("{exported} images exported · {skipped} skipped", {
+                exported: job.processed || 0,
+                skipped: job.skipped || 0,
+              })
+            }}
+          </p>
+          <p v-else-if="job.kind === 'export'">
+            {{ job.completed }}/{{ job.total }}
+            {{
+              t(
+                "images inspected. Exported and skipped totals appear in the final report.",
+              )
+            }}
+          </p>
+          <p v-if="!job.total && job.status === 'complete'">
+            {{
+              job.kind === "export"
+                ? t("No images to export")
+                : t("No images require processing")
+            }}
+          </p>
+          <section v-if="job.model || job.request" class="task-section">
+            <h3>{{ t("Execution settings") }}</h3>
+            <dl class="task-meta">
+              <template v-if="job.kind !== 'export'"
+                ><dt>{{ t("Model") }}</dt>
+                <dd>
+                  {{
+                    job.kind === "boxes_from_masks"
+                      ? t("None (CPU geometry)")
+                      : job.model || job.request?.model || t("Default")
+                  }}
+                </dd>
+                <dt v-if="job.plan">{{ t("Devices") }}</dt>
+                <dd v-if="job.plan">
+                  {{ job.plan.devices.join(", ") }}
+                </dd></template
+              ><template v-else
+                ><dt>{{ t("Task / format") }}</dt>
+                <dd>
+                  {{ taskLabel(job.request?.task || "") }} /
+                  {{ job.request?.format }}
+                </dd></template
+              >
+              <template v-if="job.request?.review_states"
+                ><dt>{{ t("Review states") }}</dt>
+                <dd>
+                  {{ job.request.review_states.map(statusLabel).join(" · ") }}
+                </dd></template
+              >
+              <template v-if="job.kind === 'detection'">
+                <dt>{{ t("Thresholds") }}</dt>
+                <dd>
+                  {{ t("Confidence") }} {{ job.request?.confidence }}
+                  {{ t("· NMS IoU") }}
+                  {{ job.request?.iou }}
+                </dd>
+                <dt>{{ t("Prediction") }}</dt>
+                <dd>
+                  {{ t("Image size") }} {{ job.request?.imgsz }}
+                  {{ t("· Max detections") }}
+                  {{ job.request?.max_det }}
+                </dd>
+                <dt>{{ t("Classes") }}</dt>
+                <dd>
+                  {{
+                    job.request?.model_classes?.join(", ") ||
+                    t("All model classes")
+                  }}
+                </dd>
+                <dt>{{ t("Write policy") }}</dt>
+                <dd>{{ statusLabel(job.request?.write_policy || "") }}</dd>
+                <dt>{{ t("New classes") }}</dt>
+                <dd>
+                  {{
+                    job.request?.allow_new_classes
+                      ? t("Add when detected")
+                      : t("Discard outside project")
+                  }}
+                </dd>
+              </template>
+              <template v-if="job.kind === 'boxes_from_masks'"
+                ><dt>{{ t("Existing boxes") }}</dt>
+                <dd>
+                  {{
+                    job.request?.recalculate_boxes
+                      ? t("Recalculate unlocked")
+                      : t("Preserve")
+                  }}
+                </dd></template
+              >
+              <template v-if="job.request?.operation"
+                ><dt>{{ t("Image range") }}</dt>
+                <dd>
+                  {{
+                    job.request?.image_ids
+                      ? t("{count} selected images", {
+                          count: job.request.image_ids.length,
+                        })
+                      : t("All project images at task creation")
+                  }}
+                </dd></template
+              >
+            </dl>
+          </section>
+          <section v-if="job.plan" class="task-section">
+            <h3>{{ t("Workers ·") }} {{ job.plan.workers.length }}</h3>
+            <div class="worker-table">
+              <div
+                v-for="(device, index) in job.plan.workers"
+                :key="index"
+                class="worker-row"
+              >
+                <strong>{{ t("Worker") }} {{ index }}</strong
+                ><span>{{ device }}</span
+                ><template
+                  v-if="job.active_workers?.some((w) => w.worker_id === index)"
+                  ><div
+                    v-for="worker in job.active_workers.filter(
+                      (w) => w.worker_id === index,
+                    )"
+                    :key="worker.worker_id"
+                    class="worker-image"
+                  >
+                    <span>{{ path(worker.image) }}</span
+                    ><span>{{ worker.elapsed_seconds }}{{ t("s") }}</span>
+                  </div></template
+                ><span v-else class="muted">{{
+                  job.status !== "running"
+                    ? t("Stopped")
+                    : job.phase === "loading"
+                      ? t("Loading model…")
+                      : t("Idle")
+                }}</span>
+              </div>
+            </div>
+          </section>
+          <section v-if="job.error || job.failed.length" class="task-section">
+            <h3>{{ t("Errors ·") }} {{ job.failed.length }}</h3>
+            <p v-if="job.error" class="task-error">{{ job.error }}</p>
+            <div class="task-failures">
+              <div v-for="(failure, index) in job.failed" :key="index">
+                <strong>{{ path(failure.image) }}</strong>
+                <p>{{ failure.error }}</p>
+              </div>
+            </div>
+          </section>
+          <section v-if="job.output" class="task-section">
+            <h3>{{ t("Saved on the backend") }}</h3>
+            <p class="task-output">{{ job.output }}</p>
+          </section>
+          <div class="task-actions">
+            <button
+              v-if="job.status === 'running'"
+              @click="emit('cancel', job.id)"
+            >
+              {{ t("Cancel after active images") }}</button
+            ><button
+              v-else-if="job.kind !== 'export' && job.remaining?.length"
+              @click="emit('resume', job.id)"
+            >
+              {{ t("Resume pending images") }}</button
+            ><button @click="emit('logs')">{{ t("View logs") }}</button>
+          </div>
+          <p v-if="job.kind !== 'export'" class="muted">
+            {{
+              t(
+                "Finished = succeeded + failed. Success is counted after saving. Generated annotations still require human review.",
+              )
+            }}
+          </p>
+        </div>
+      </details>
+    </div>
+  </NModal>
 </template>
 <style scoped>
-.task-window {
-  position: fixed;
-  z-index: 1500;
-  top: 10vh;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 900px;
-  max-width: 90vw;
-  height: 80vh;
-  min-width: 320px;
-  min-height: 280px;
-  background: white;
-  border: 1px solid #d7dfe9;
-  border-radius: 12px;
-  box-shadow: 0 14px 48px #15243c35;
-  display: flex;
-  flex-direction: column;
-  resize: both;
-  overflow: hidden;
-}
-.task-window-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 22px;
-  border-bottom: 1px solid var(--line);
-  flex: none;
-}
-.task-window-heading h2 {
-  margin: 0;
-  font-size: 17px;
-}
-.task-window-body {
-  padding: 6px 22px 20px;
-  overflow: auto;
-  flex: 1;
-  min-height: 0;
-}
-
 .task-card {
   margin: 16px 0;
   border: 1px solid var(--line);

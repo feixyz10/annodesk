@@ -86,9 +86,13 @@ def test_empty_mask_does_not_export_as_unconfirmed_background(tmp_path):
     ann = project.annotation(image_id)
     ann.instances[0].mask = encode_mask(np.zeros((80, 100), dtype=np.uint8))
     ann.segmentation_review = "ok"
-    project.save(image_id, ann)
-    output = export_project(project, "segmentation")
-    assert json.loads((output / "report.json").read_text())["exported"] == 0
+    # Simulate an older persisted record; new approvals reject empty masks.
+    project.annotation_path(image_id).write_text(json.dumps(ann.model_dump()))
+    import pytest
+
+    with pytest.raises(ValueError, match="No images qualify"):
+        export_project(project, "segmentation")
+    assert not (project.private / "exports").exists()
     ann = project.annotation(image_id)
     ann.explicit_empty["segmentation"] = True
     project.save(image_id, ann)
@@ -113,7 +117,13 @@ def test_export_cancellation_during_packaging_removes_only_incomplete_output(tmp
             cancel = True
 
     with pytest.raises(ValueError, match="Export cancelled"):
-        export_project(project, "detection", progress=progress, cancelled=lambda: cancel)
+        export_project(
+            project,
+            "detection",
+            progress=progress,
+            cancelled=lambda: cancel,
+            output=str(project.private / "exports" / "cancelled"),
+        )
     assert list((project.private / "exports").iterdir()) == [previous]
     assert (previous / "report.json").exists()
 

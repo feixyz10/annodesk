@@ -630,3 +630,579 @@ describe("mask candidates", () => {
     expect(s.history).toHaveLength(0);
   });
 });
+
+describe("interactive single-mask prompts", () => {
+  function prepare() {
+    const s = initialized();
+    const obj = s.annotation!.instances[0];
+    obj.box = null;
+    obj.prompt_box = [1, 1, 8, 8];
+    s.selected = obj.id;
+    return { s, obj };
+  }
+  function response(s: ReturnType<typeof useProject>) {
+    return {
+      project_id: s.meta!.id,
+      image_id: s.current!.id,
+      instance_id: s.selected,
+      revision: s.annotation!.revision,
+      image_stamp: "test",
+      model: "sam",
+      items: [
+        {
+          mask: { size: [10, 10], counts: "single" },
+          polygons: [
+            [
+              [1, 1],
+              [4, 1],
+              [4, 4],
+            ],
+          ],
+          quality: null,
+          overlay: "",
+        },
+      ],
+    };
+  }
+  function setupRequests(
+    s: ReturnType<typeof useProject>,
+    predict = () => Promise.resolve(response(s)),
+  ) {
+    mock.mockImplementation(async (path, method) => {
+      if (path.endsWith("/mask-candidates")) return predict();
+      if (method === "PUT")
+        return { ...s.annotation, revision: s.annotation!.revision + 1 };
+      return ann();
+    });
+  }
+  async function flush() {
+    for (let i = 0; i < 15; i++) await Promise.resolve();
+  }
+  it("coalesces clicks, requests single-mask inference and preserves instance/class/box", async () => {
+    const { s, obj } = prepare();
+    setupRequests(s);
+    const id = obj.id,
+      cls = obj.class_id;
+    obj.points.push({ x: 2, y: 2, positive: true });
+    s.changed("segmentation");
+    s.promptsChanged();
+    await vi.advanceTimersByTimeAsync(200);
+    obj.points.push({ x: 7, y: 7, positive: false });
+    s.changed("segmentation");
+    s.promptsChanged();
+    await vi.advanceTimersByTimeAsync(350);
+    await flush();
+    const calls = mock.mock.calls.filter(([path]) =>
+      path.endsWith("/mask-candidates"),
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0][2]).toMatchObject({
+      multimask_output: false,
+      instance_id: id,
+    });
+    expect(s.object).toMatchObject({
+      id,
+      class_id: cls,
+      box: null,
+      source: "sam",
+    });
+    expect(s.object!.mask).toBeTruthy();
+    expect(s.annotation!.segmentation_review).toBe("pending");
+    expect(s.promptStatus).toBe("Mask updated");
+  });
+  it("discards an in-flight result after newer prompts and runs only the latest", async () => {
+    const { s, obj } = prepare();
+    const pending = deferred<any>();
+    let count = 0;
+    setupRequests(s, () =>
+      ++count === 1 ? pending.promise : Promise.resolve(response(s)),
+    );
+    s.changed("segmentation");
+    s.promptsChanged();
+    await vi.advanceTimersByTimeAsync(350);
+    const old = response(s);
+    obj.points.push({ x: 3, y: 3, positive: true });
+    s.changed("segmentation");
+    s.promptsChanged();
+    await vi.advanceTimersByTimeAsync(350);
+    expect(count).toBe(1);
+    pending.resolve({
+      ...old,
+      items: [{ ...old.items[0], mask: { counts: "stale" } }],
+    });
+    await flush();
+    expect(count).toBe(2);
+    expect(s.object!.mask).toMatchObject({ counts: "single" });
+  });
+  it.each(["navigation", "edit", "model", "tool", "new object"])(
+    "discards obsolete auto masks after %s",
+    async (change) => {
+      const { s } = prepare();
+      const pending = deferred<any>();
+      setupRequests(s, () => pending.promise);
+      s.changed("segmentation");
+      s.promptsChanged();
+      await vi.advanceTimersByTimeAsync(350);
+      const old = response(s);
+      if (change === "navigation") await s.load(s.images[1]);
+      else if (change === "edit") {
+        s.annotation!.notes = "new";
+        s.changed();
+      } else if (change === "model") s.model = "other";
+      else if (change === "new object") s.newObject();
+      else s.tool = "select-other";
+      pending.resolve(old);
+      await flush();
+      expect(s.annotation!.instances[0].mask).toBeNull();
+      expect(s.promptStatus).not.toBe("Updating mask…");
+    },
+  );
+  it("clearing all prompts cancels late masks and never restores a removed prompt-only draft", async () => {
+    const { s } = prepare();
+    const pending = deferred<any>();
+    setupRequests(s, () => pending.promise);
+    s.changed("segmentation");
+    s.promptsChanged();
+    await vi.advanceTimersByTimeAsync(350);
+    const old = response(s);
+    s.clearAllPrompts();
+    pending.resolve(old);
+    await flush();
+    expect(s.annotation!.instances).toHaveLength(0);
+    expect(s.candidates).toBeNull();
+  });
+  it("shares one in-flight request with candidate mode and discards its old single mask", async () => {
+    const { s } = prepare();
+    const pending = deferred<any>();
+    let count = 0;
+    s.model = "sam";
+    s.models = {
+      config: "models.json",
+      default_model: "sam",
+      models: [
+        {
+          id: "sam",
+          name: "SAM",
+          backend: "sam2",
+          task: "segmentation",
+          available: true,
+          mask_candidates: true,
+          text_prompts: false,
+          path: null,
+          error: null,
+        },
+      ],
+    };
+    setupRequests(s, () =>
+      ++count === 1 ? pending.promise : Promise.resolve(response(s)),
+    );
+    s.changed("segmentation");
+    s.promptsChanged();
+    await vi.advanceTimersByTimeAsync(350);
+    const old = response(s);
+    await s.generateCandidates();
+    expect(count).toBe(1);
+    pending.resolve(old);
+    await flush();
+    expect(count).toBe(2);
+    expect(s.candidates?.phase).toBe("ready");
+    expect(s.object!.mask).toBeNull();
+    const calls = mock.mock.calls.filter(([path]) =>
+      path.endsWith("/mask-candidates"),
+    );
+    expect(calls[0][2]).toMatchObject({ multimask_output: false });
+    expect(calls[1][2]).not.toHaveProperty("multimask_output");
+  });
+  it("deletes a selected point or prompt box without deleting the mask or instance, and supports undo", async () => {
+    const { s, obj } = prepare();
+    obj.mask = { counts: "original" };
+    obj.points = [{ x: 2, y: 2, positive: true }];
+    s.selectedPrompt = 0;
+    s.deleteSelected();
+    expect(s.object!.points).toHaveLength(0);
+    expect(s.object!.mask).toMatchObject({ counts: "original" });
+    s.undo();
+    expect(s.annotation!.instances[0].points).toHaveLength(1);
+    s.selectPrompt(obj.id, "box");
+    s.deleteSelected();
+    expect(s.object!.prompt_box).toBeNull();
+    expect(s.annotation!.instances).toHaveLength(1);
+    s.deletePrompt(true);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(
+      mock.mock.calls.filter(([path]) => path.endsWith("/mask-candidates")),
+    ).toHaveLength(0);
+    expect(s.object!.mask).toMatchObject({ counts: "original" });
+  });
+  it("keeps the current mask after a failed prediction", async () => {
+    const { s, obj } = prepare();
+    obj.mask = { counts: "original" };
+    setupRequests(s, () => Promise.reject(new Error("Model unavailable")));
+    s.changed("segmentation");
+    s.promptsChanged();
+    await vi.advanceTimersByTimeAsync(350);
+    expect(s.object!.mask).toMatchObject({ counts: "original" });
+    expect(s.error).toContain("Model unavailable");
+    expect(s.promptStatus).toContain("failed");
+  });
+  it("does not report missing selection when Segment current has no work", async () => {
+    const { s, obj } = prepare();
+    obj.mask = { counts: "existing" };
+    await s.segment(true);
+    await s.segment(true);
+    expect(mock).not.toHaveBeenCalled();
+    expect(s.error).toBe("");
+    expect(s.promptStatus).toContain("No missing masks");
+  });
+});
+
+describe("independent geometry deletion", () => {
+  it.each(["box", "mask"] as const)(
+    "deleting selected %s preserves the other geometry and supports undo",
+    (geometry) => {
+      const s = initialized();
+      const obj = s.annotation!.instances[0];
+      const box = [...obj.box!];
+      obj.mask = { size: [10, 10], counts: "original" };
+      obj.polygons = [
+        [
+          [1, 1],
+          [8, 1],
+          [8, 8],
+        ],
+      ];
+      s.selected = obj.id;
+      s.selectedGeometry = geometry;
+      s.deleteSelected();
+      expect(s.annotation!.instances).toHaveLength(1);
+      if (geometry === "box") {
+        expect(obj.box).toBeNull();
+        expect(obj.mask).toBeTruthy();
+        expect(s.annotation!.segmentation_review).toBe("ok");
+      } else {
+        expect(obj.box).toEqual(box);
+        expect(obj.mask).toBeNull();
+        expect(obj.polygons).toEqual([]);
+        expect(s.annotation!.detection_review).toBe("ok");
+      }
+      s.undo();
+      expect(s.annotation!.instances[0].box).toEqual(box);
+      expect(s.annotation!.instances[0].mask).toBeTruthy();
+    },
+  );
+});
+
+describe("continuous object annotation", () => {
+  it("starts the next object without mutating or creating an empty annotation", () => {
+    const s = initialized();
+    const obj = s.annotation!.instances[0];
+    obj.mask = { counts: "existing" };
+    obj.points = [{ x: 2, y: 2, positive: true }];
+    s.selected = obj.id;
+    s.tool = "negative";
+    const before = JSON.stringify(s.annotation);
+    s.newObject();
+    expect(s.selected).toBeNull();
+    expect(s.tool).toBe("positive");
+    expect(JSON.stringify(s.annotation)).toBe(before);
+    expect(s.promptStatus).toContain("new object");
+    s.tool = "promptbox";
+    s.newObject();
+    expect(s.tool).toBe("promptbox");
+    s.task = "detection";
+    s.newObject();
+    expect(s.tool).toBe("box");
+  });
+  it("deleting the whole object removes its prompts while preserving other objects and can be undone", () => {
+    const s = initialized();
+    const obj = s.annotation!.instances[0];
+    obj.mask = { counts: "old" };
+    obj.points = [
+      { x: 2, y: 2, positive: true },
+      { x: 8, y: 8, positive: false },
+    ];
+    obj.prompt_box = [1, 1, 8, 8];
+    const other = instance("c");
+    s.annotation!.instances.push(other);
+    s.selected = obj.id;
+    s.selectedGeometry = "mask";
+    s.remove();
+    expect(s.annotation!.instances.map((o) => o.id)).toEqual([other.id]);
+    s.undo();
+    expect(s.annotation!.instances[0]).toMatchObject({
+      id: obj.id,
+      mask: { counts: "old" },
+      points: obj.points,
+      prompt_box: obj.prompt_box,
+    });
+  });
+});
+
+it("Clear prompts preserves an accepted mask even when the detection box remains", async () => {
+  const s = initialized();
+  const obj = s.annotation!.instances[0];
+  s.selected = obj.id;
+  obj.mask = { counts: "accepted" };
+  obj.points = [{ x: 3, y: 3, positive: true }];
+  obj.prompt_box = [2, 2, 7, 7];
+  const box = [...obj.box!];
+  mock.mockImplementation(async () => ({ ...s.annotation, revision: 1 }));
+  s.deletePrompt(true);
+  await vi.advanceTimersByTimeAsync(600);
+  expect(obj.mask).toEqual({ counts: "accepted" });
+  expect(obj.box).toEqual(box);
+  expect(obj.points).toEqual([]);
+  expect(obj.prompt_box).toBeNull();
+  expect(
+    mock.mock.calls.some(([path]) => path.endsWith("/mask-candidates")),
+  ).toBe(false);
+});
+
+it("switches explicit geometry targets without changing annotation data", () => {
+  const s = initialized();
+  const obj = s.annotation!.instances[0];
+  obj.mask = { counts: "mask" };
+  obj.prompt_box = [1, 1, 8, 8];
+  obj.points = [{ x: 2, y: 2, positive: true }];
+  const before = JSON.stringify(s.annotation);
+  s.tool = "positive";
+  s.selectPrompt(obj.id, "box");
+  expect(s.tool).toBe("select");
+  expect(s.selectionTarget).toBe("prompts");
+  expect(s.selectedPrompt).toBe("box");
+  s.selectGeometry(obj.id, "box");
+  expect(s.selectionTarget).toBe("results");
+  expect(s.selectedGeometry).toBe("box");
+  expect(s.selectedPrompt).toBeNull();
+  s.selectGeometry(obj.id, "mask");
+  expect(s.selectedGeometry).toBe("mask");
+  s.selectPrompt(obj.id, 0);
+  expect(s.selectionTarget).toBe("prompts");
+  expect(s.selectedPrompt).toBe(0);
+  expect(s.selectedGeometry).toBeNull();
+  expect(JSON.stringify(s.annotation)).toBe(before);
+});
+
+describe("image-wide prompt clearing", () => {
+  it("clears all unlocked prompts in one undo step, retaining masks, boxes and locked objects", () => {
+    const s = initialized();
+    const first = s.annotation!.instances[0];
+    first.mask = { counts: "one" };
+    first.points = [{ x: 2, y: 2, positive: true }];
+    first.prompt_box = [1, 1, 8, 8];
+    const second = instance("c");
+    second.mask = { counts: "two" };
+    second.points = [{ x: 5, y: 5, positive: false }];
+    second.hidden = true;
+    const locked = instance("c");
+    locked.locked = true;
+    locked.points = [{ x: 4, y: 4, positive: true }];
+    locked.prompt_box = [2, 2, 7, 7];
+    const draft = instance("c");
+    draft.points = [{ x: 3, y: 3, positive: true }];
+    s.annotation!.instances.push(second, locked, draft);
+    s.selected = first.id;
+    s.selectedPrompt = 0;
+    const before = JSON.stringify(s.annotation);
+    expect(s.canClearAllPrompts).toBe(true);
+    s.clearAllPrompts();
+    expect(first.points).toEqual([]);
+    expect(first.prompt_box).toBeNull();
+    expect(first.mask).toEqual({ counts: "one" });
+    expect(first.box).toEqual([1, 1, 8, 8]);
+    expect(second.points).toEqual([]);
+    expect(second.mask).toEqual({ counts: "two" });
+    expect(locked.points).toHaveLength(1);
+    expect(locked.prompt_box).toEqual([2, 2, 7, 7]);
+    expect(s.annotation!.instances.map((o) => o.id)).not.toContain(draft.id);
+    expect(s.selectedPrompt).toBeNull();
+    expect(s.canClearAllPrompts).toBe(false);
+    expect(s.history).toHaveLength(1);
+    s.undo();
+    expect(JSON.stringify({ ...s.annotation, segmentation_review: "ok" })).toBe(
+      before,
+    );
+  });
+  it("does nothing when all remaining prompts are locked", () => {
+    const s = initialized();
+    s.annotation!.instances[0].locked = true;
+    s.annotation!.instances[0].points = [{ x: 2, y: 2, positive: true }];
+    const before = JSON.stringify(s.annotation);
+    s.clearAllPrompts();
+    expect(JSON.stringify(s.annotation)).toBe(before);
+    expect(s.history).toHaveLength(0);
+  });
+});
+
+it("shares explicit box padding parameters between current-image and batch payloads", () => {
+  const s = useProject();
+  s.boxPadding = {
+    box_padding_mode: "ratio",
+    box_padding_pixels: 8,
+    box_padding_ratio: 0.1,
+    box_padding_min: true,
+  };
+  expect(s.parameters("boxes_from_masks")).toMatchObject(s.boxPadding);
+  expect(s.parameters("segmentation")).not.toHaveProperty("box_padding_pixels");
+  expect(s.parameters("detection")).not.toHaveProperty("box_padding_pixels");
+});
+
+it("ordinary selection restores result targeting without touching annotation data", () => {
+  const s = initialized();
+  const obj = s.annotation!.instances[0];
+  obj.points = [{ x: 2, y: 2, positive: true }];
+  s.selectPrompt(obj.id, 0);
+  const before = JSON.stringify(s.annotation);
+  s.activateSelection();
+  expect(s.tool).toBe("select");
+  expect(s.selectionTarget).toBe("results");
+  expect(s.selectedPrompt).toBeNull();
+  expect(JSON.stringify(s.annotation)).toBe(before);
+});
+it("clears all unlocked image annotations in one undo step and preserves image metadata", () => {
+  const s = initialized();
+  const unlocked = s.annotation!.instances[0];
+  unlocked.mask = { counts: "mask" };
+  unlocked.points = [{ x: 2, y: 2, positive: true }];
+  const locked = instance("c");
+  locked.locked = true;
+  locked.prompt_box = [1, 1, 3, 3];
+  s.annotation!.instances.push(locked);
+  s.annotation!.tags = ["custom"];
+  s.annotation!.notes = "keep";
+  s.annotation!.explicit_empty = { detection: true, segmentation: true };
+  const objects = JSON.stringify(s.annotation!.instances);
+  s.selected = unlocked.id;
+  s.selectedGeometry = "mask";
+  s.clearImageAnnotations();
+  expect(s.annotation!.instances.map((o) => o.id)).toEqual([locked.id]);
+  expect(s.annotation).toMatchObject({
+    notes: "keep",
+    tags: ["custom"],
+    detection_review: "pending",
+    segmentation_review: "pending",
+    explicit_empty: { detection: false, segmentation: false },
+  });
+  expect(s.selected).toBeNull();
+  expect(s.selectedGeometry).toBeNull();
+  expect(s.history).toHaveLength(1);
+  s.undo();
+  expect(JSON.stringify(s.annotation!.instances)).toBe(objects);
+  expect(s.annotation!.explicit_empty).toEqual({
+    detection: true,
+    segmentation: true,
+  });
+});
+it("requires explicit inclusion to remove locked objects and ignores clearing during navigation", () => {
+  const s = initialized();
+  s.annotation!.instances[0].locked = true;
+  s.clearImageAnnotations();
+  expect(s.history).toHaveLength(0);
+  s.navigating = true;
+  s.clearImageAnnotations(true);
+  expect(s.annotation!.instances).toHaveLength(1);
+  s.navigating = false;
+  s.clearImageAnnotations(true);
+  expect(s.annotation!.instances).toHaveLength(0);
+  expect(s.history).toHaveLength(1);
+  s.undo();
+  expect(s.annotation!.instances[0].locked).toBe(true);
+});
+it("discards a late model result after image annotations are cleared", async () => {
+  const s = initialized(),
+    pending = deferred<Annotation>();
+  const old = JSON.parse(JSON.stringify(s.annotation));
+  mock.mockImplementation(async (path) =>
+    path.endsWith("/segment") ? pending.promise : s.annotation!,
+  );
+  const run = s.segment();
+  await Promise.resolve();
+  await Promise.resolve();
+  s.clearImageAnnotations(true);
+  pending.resolve({ ...old, revision: 1 });
+  await run;
+  expect(s.annotation!.instances).toHaveLength(0);
+});
+
+it("enables auto segmentation by default and fills only pending visible unlocked boxes", async () => {
+  const s = initialized();
+  expect(s.autoSegment).toBe(true);
+  s.model = "sam";
+  s.models = {
+    config: "test",
+    default_model: "sam",
+    models: [
+      {
+        id: "sam",
+        name: "SAM",
+        backend: "sam2",
+        available: true,
+        path: "/tmp/model",
+        error: null,
+        text_prompts: false,
+      },
+    ],
+  };
+  const target = ann();
+  target.segmentation_review = "pending";
+  mock.mockImplementation(async (path) =>
+    path.endsWith("/segment") ? { ...target, revision: 1 } : target,
+  );
+  await s.load(s.images[1]);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  expect(mock.mock.calls.some(([path]) => path.endsWith("/segment"))).toBe(
+    true,
+  );
+});
+it.each(["excluded", "reviewed", "locked", "hidden", "missing-model"])(
+  "does not auto-segment %s images/objects",
+  async (reason) => {
+    const s = initialized();
+    s.model = "sam";
+    s.models = {
+      config: "test",
+      default_model: "sam",
+      models: [
+        {
+          id: "sam",
+          name: "SAM",
+          backend: "sam2",
+          available: reason !== "missing-model",
+          path: null,
+          error: null,
+          text_prompts: false,
+        },
+      ],
+    };
+    const target = ann();
+    target.segmentation_review = reason === "reviewed" ? "ok" : "pending";
+    target.excluded = reason === "excluded";
+    target.instances[0].locked = reason === "locked";
+    target.instances[0].hidden = reason === "hidden";
+    mock.mockResolvedValue(target);
+    await s.load(s.images[1]);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(mock.mock.calls.some(([path]) => path.endsWith("/segment"))).toBe(
+      false,
+    );
+  },
+);
+
+it("requires explicit empty confirmation for approval but permits needs-review and exclusion", () => {
+  const s = initialized();
+  s.annotation!.instances = [];
+  s.annotation!.segmentation_review = "pending";
+  s.setReview("ok");
+  expect(s.annotation!.segmentation_review).toBe("pending");
+  expect(s.error).toContain("explicitly confirm");
+  s.setReview("uncertain");
+  expect(s.annotation!.segmentation_review).toBe("uncertain");
+  s.setReview("excluded");
+  expect(s.annotation!.excluded).toBe(true);
+  s.setReview("excluded");
+  s.setExplicitEmpty(true);
+  s.setReview("ok");
+  expect(s.annotation!.segmentation_review).toBe("ok");
+  s.setExplicitEmpty(false);
+  expect(s.annotation!.segmentation_review).toBe("pending");
+});

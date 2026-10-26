@@ -1,6 +1,6 @@
 {
   "segmentation": {
-    "default_model": "facebook/sam2.1-hiera-tiny",
+    "default_model": "facebook/sam2.1-hiera-small",
     "models": [
       {
         "id": "facebook/sam2.1-hiera-tiny",

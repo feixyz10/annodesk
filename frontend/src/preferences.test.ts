@@ -78,7 +78,7 @@ describe("optional browser persistence", () => {
         expect(html).toContain("AnnoDesk");
         expect(html).toContain('class="workspace"');
         expect(html).toContain("--left:260px");
-        expect(html).toContain("--right:290px");
+        expect(html).toContain("--right:340px");
         expect(html).toContain("height:53%");
         expect(html).toContain(language === "en" ? "Images" : "图片");
       }
@@ -87,7 +87,7 @@ describe("optional browser persistence", () => {
   it("retains saved layout and API overrides when storage is available", async () => {
     const values: Record<string, string> = {
       "lb-left": "330",
-      "lb-right": "320",
+      "annodesk-inspector-width": "320",
       "lb-top": "60",
       "annodesk-api": "/preferred/api/v1",
     };

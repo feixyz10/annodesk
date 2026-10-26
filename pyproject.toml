@@ -1,7 +1,7 @@
 [project]
 name = "annodesk"
-version = "0.2.2"
-description = "A local-first image annotation workbench for boxes and masks"
+version = "0.3.0"
+description = "A local-first image annotation tool for bounding boxes and instance masks, with SAM-powered interactive segmentation and YOLO-assisted detection."
 readme = "docs/user-guide.md"
 license = "MIT"
 license-files = ["LICENSE"]

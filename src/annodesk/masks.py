@@ -57,3 +57,13 @@ def contours(mask: np.ndarray) -> list[list[list[float]]]:
         if area > 0 and len(simplified) >= 3:
             polygons.append(simplified)
     return polygons
+
+
+def has_task_geometry(annotation, task: str) -> bool:
+    """A prompt is not an annotation; empty RLEs are not segmentation results."""
+    return any(
+        bool(obj.box)
+        if task == "detection"
+        else (bool(decode_mask(obj.mask).any()) if obj.mask else bool(obj.polygons))
+        for obj in annotation.instances
+    )

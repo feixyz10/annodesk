@@ -18,6 +18,7 @@ from annodesk.classes import compatible
 from annodesk.detector import inspect_classes
 from annodesk.domain import Annotation, uid
 from annodesk.events import EventLog
+from annodesk.exports import preview_export
 from annodesk.images import load_rgb
 from annodesk.inference import SegmentationService, SegmentRequest, UltralyticsAdapter
 from annodesk.jobs import BatchJobs
@@ -38,6 +39,8 @@ class ExportInput(BaseModel):
     task: Literal["detection", "segmentation"] = "segmentation"
     format: Literal["yolo", "coco"] = "yolo"
     include_pending: bool = False
+    output: str | None = None
+    expected_signature: str | None = None
 
 
 class ReindexInput(BaseModel):
@@ -235,12 +238,15 @@ def project_routes(
             }
 
     @router.get("/project/statistics")
-    def statistics(task: Literal["detection", "segmentation"] = "segmentation"):
+    def statistics(
+        task: Literal["detection", "segmentation"] = "segmentation",
+        include_excluded: bool = False,
+    ):
         item = project()
         with item.lock:
             if item.statistics is None:
                 item.statistics = StatisticsIndex(item)
-        return item.statistics.read(task)
+        return item.statistics.read(task, include_excluded)
 
     @router.get("/images")
     def images(offset: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=1000)):
@@ -368,9 +374,20 @@ def project_routes(
             raise ValueError("Wait for detection to finish before reindexing classes")
         return reindex_classes(project(), body.order)
 
+    @router.post("/export/preview")
+    def export_preview(body: ExportInput):
+        return preview_export(project(), body.task, body.format, body.include_pending, body.output)
+
     @router.post("/export")
     def export(body: ExportInput):
-        output = export_project(project(), body.task, body.format, body.include_pending)
+        output = export_project(
+            project(),
+            body.task,
+            body.format,
+            body.include_pending,
+            output=body.output,
+            expected_signature=body.expected_signature,
+        )
         return {
             "path": str(output),
             "report": json.loads((output / "report.json").read_text()),
@@ -378,7 +395,9 @@ def project_routes(
 
     @router.post("/export/jobs")
     def export_job(body: ExportInput):
-        return batch().export(body.task, body.format, body.include_pending)
+        return batch().export(
+            body.task, body.format, body.include_pending, body.output, body.expected_signature
+        )
 
     def require_idle_batch(manager):
         # Caller holds the same lock used by start/resume/export, closing the

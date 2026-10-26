@@ -12,7 +12,7 @@ import yaml
 from annodesk.colors import choose_color
 from annodesk.domain import Annotation, Instance, uid
 from annodesk.images import raster_size
-from annodesk.masks import contours, decode_mask
+from annodesk.masks import contours, decode_mask, has_task_geometry
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
@@ -314,6 +314,22 @@ class Project:
                                 [value for x, y in polygon for value in (x / width, y / height)],
                             )
                         )
+            for task in ("detection", "segmentation"):
+                # Reject new approvals and removal of approved geometry/empty
+                # confirmation. Unrelated edits to legacy records remain possible.
+                if (
+                    getattr(annotation, f"{task}_review") == "ok"
+                    and not annotation.explicit_empty.get(task)
+                    and not has_task_geometry(annotation, task)
+                    and (
+                        getattr(old, f"{task}_review") != "ok"
+                        or old.explicit_empty.get(task)
+                        or has_task_geometry(old, task)
+                    )
+                ):
+                    raise ValueError(
+                        "Add annotations or explicitly confirm no objects before approving this task"
+                    )
             updated = annotation.model_copy(deep=True)
             updated.revision += 1
             labels = ["".join(detection), "".join(segmentation)]

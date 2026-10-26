@@ -1,20 +1,16 @@
 <script setup lang="ts">
 import { t, uiError } from "../i18n";
 import { onBeforeUnmount, ref, watch } from "vue";
-import { request } from "../api";
+import { request, type ProjectStatistics } from "../api";
+import StatisticsDrawer from "./StatisticsDrawer.vue";
 import { useProject } from "../stores/project";
 import { reviewStates } from "../review";
 const store = useProject();
 const props = defineProps<{ active: boolean }>();
-interface Statistics {
-  total: number;
-  counts: Record<string, number>;
-  reviewed: number;
-  statistics_revision: number;
-  status: string;
-}
-const stats = ref<Statistics | null>(null),
-  error = ref("");
+const stats = ref<ProjectStatistics | null>(null),
+  error = ref(""),
+  detailsOpen = ref(false),
+  includeExcluded = ref(false);
 let generation = 0,
   timer: ReturnType<typeof setTimeout> | undefined;
 async function refresh(reset = false) {
@@ -25,8 +21,11 @@ async function refresh(reset = false) {
   if (reset) stats.value = null;
   if (!project || document.hidden) return;
   try {
-    const result = await request<Statistics>(
-      "/project/statistics?task=" + task,
+    const result = await request<ProjectStatistics>(
+      "/project/statistics?task=" +
+        task +
+        "&include_excluded=" +
+        includeExcluded.value,
     );
     if (
       generation !== token ||
@@ -47,7 +46,12 @@ async function refresh(reset = false) {
   }
 }
 watch(
-  () => [store.meta?.id, store.meta?.session, store.task],
+  [
+    () => store.meta?.id,
+    () => store.meta?.session,
+    () => store.task,
+    () => includeExcluded.value,
+  ],
   () => void refresh(true),
   { immediate: true },
 );
@@ -84,14 +88,9 @@ onBeforeUnmount(() => {
     }}</span>
     <template v-else>
       <span v-if="!stats.total">{{ t("No images") }}</span>
-      <span
-        v-else
-        :title="
-          t(
-            'Reviewed = Approved + Needs review + Excluded. Automatic masks do not count as reviewed.',
-          )
-        "
-        >{{ t("Reviewed") }} <b>{{ stats.reviewed }}/{{ stats.total }}</b></span
+      <span v-else
+        >{{ t("Approved") }}
+        <b>{{ stats.counts.ok || 0 }}/{{ stats.total }}</b></span
       >
       <span
         v-for="state in reviewStates"
@@ -100,7 +99,36 @@ onBeforeUnmount(() => {
         ><i :style="{ background: state.color }" /> {{ t(state.label) }}
         <b>{{ stats.counts[state.value] }}</b></span
       >
+      <span
+        class="geometry-counts"
+        :title="
+          t(
+            includeExcluded
+              ? 'Saved boxes and masks, including excluded images'
+              : 'Saved boxes and masks, excluding excluded images',
+          )
+        "
+        >{{ t("Boxes") }} <b>{{ stats.boxes }}</b> · {{ t("Masks") }}
+        <b>{{ stats.masks }}</b></span
+      >
+      <span v-if="stats.invalid_images" class="statistics-warning">{{
+        t("Counts exclude {count} images with unreadable annotations.", {
+          count: stats.invalid_images,
+        })
+      }}</span>
     </template>
+    <button
+      :title="t('Per-class annotation counts')"
+      @click="detailsOpen = true"
+    >
+      {{ t("More statistics") }}
+    </button>
+    <StatisticsDrawer
+      v-model:show="detailsOpen"
+      v-model:include-excluded="includeExcluded"
+      :stats="stats"
+      :error="error"
+    />
   </div>
 </template>
 <style scoped>
@@ -119,6 +147,15 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   color: #576578;
+}
+.geometry-counts {
+  border-left: 1px solid var(--line);
+  padding-left: 16px;
+}
+.statistics-bar button {
+  margin-left: auto;
+  padding: 3px 8px;
+  font-size: 12px;
 }
 .statistics-bar b {
   color: #283445;

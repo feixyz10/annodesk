@@ -28,7 +28,7 @@ export const useProject = defineStore("project", () => {
   const task = ref<"detection" | "segmentation">("segmentation"),
     tool = ref("select"),
     search = ref(""),
-    autoSegment = ref(false),
+    autoSegment = ref(true),
     autoDetect = ref(false),
     detectionModel = ref(""),
     model = ref("");
@@ -69,6 +69,50 @@ export const useProject = defineStore("project", () => {
     )
       detectionModel.value = meta.value.active_models.detection;
   }
+  const boxPadding = ref({
+    box_padding_mode: "pixels" as "pixels" | "ratio",
+    box_padding_pixels: 0,
+    box_padding_ratio: 0,
+    box_padding_min: false,
+  });
+  function hasCurrentTaskGeometry() {
+    return (
+      annotation.value?.instances.some((o) =>
+        task.value === "detection" ? !!o.box : !!o.mask || !!o.polygons.length,
+      ) ?? false
+    );
+  }
+  function setExplicitEmpty(value: boolean) {
+    const ann = annotation.value;
+    if (!ann || navigating.value) return;
+    checkpoint();
+    ann.explicit_empty[task.value] = value;
+    const key =
+      task.value === "detection" ? "detection_review" : "segmentation_review";
+    if (!value && ann[key] === "ok" && !hasCurrentTaskGeometry())
+      ann[key] = "pending";
+    changed();
+  }
+  function setReview(value: "ok" | "pending" | "uncertain" | "excluded") {
+    const ann = annotation.value;
+    if (!ann || navigating.value) return;
+    if (
+      value === "ok" &&
+      !hasCurrentTaskGeometry() &&
+      !ann.explicit_empty[task.value]
+    ) {
+      error.value =
+        "Add annotations or explicitly confirm no objects before approving this task";
+      return;
+    }
+    checkpoint();
+    if (value === "excluded") ann.excluded = !ann.excluded;
+    else
+      ann[
+        task.value === "detection" ? "detection_review" : "segmentation_review"
+      ] = value;
+    changed();
+  }
   function parameters(
     operation: Operation,
     selectedModel?: string,
@@ -87,6 +131,7 @@ export const useProject = defineStore("project", () => {
       device_type: "auto",
       devices: "auto",
       ...meta.value?.model_settings?.[id],
+      ...(operation === "boxes_from_masks" ? boxPadding.value : {}),
       model: id,
       operation,
     };
@@ -144,6 +189,302 @@ export const useProject = defineStore("project", () => {
   const object = computed(() =>
     annotation.value?.instances.find((i) => i.id === selected.value),
   );
+  const selectedPrompt = ref<number | "box" | null>(null);
+  const selectedGeometry = ref<"box" | "mask" | null>(null);
+  const selectionTarget = ref<"results" | "prompts">("results");
+  const promptStatus = ref("");
+  let promptGeneration = 0,
+    promptQueued = false;
+  let promptTimer: ReturnType<typeof setTimeout> | undefined;
+  function cancelInteractive() {
+    promptGeneration++;
+    clearTimeout(promptTimer);
+    promptQueued = false;
+    promptStatus.value = "";
+  }
+  function activateSelection(target: "results" | "prompts" = "results") {
+    if (navigating.value) return;
+    tool.value = "select";
+    selectionTarget.value = target;
+  }
+  function selectGeometry(id: string, geometry: "box" | "mask") {
+    const obj = annotation.value?.instances.find((o) => o.id === id);
+    if (
+      !obj ||
+      navigating.value ||
+      (geometry === "box" ? !obj.box : !(obj.mask || obj.polygons.length))
+    )
+      return;
+    tool.value = "select";
+    selectionTarget.value = "results";
+    selected.value = id;
+    selectedPrompt.value = null;
+    selectedGeometry.value = geometry;
+  }
+  watch(
+    selectionTarget,
+    () => {
+      selectedPrompt.value = null;
+      selectedGeometry.value = null;
+      cancelInteractive();
+    },
+    { flush: "sync" },
+  );
+  function newObject() {
+    if (navigating.value || !annotation.value || !current.value) return;
+    cancelInteractive();
+    cancelCandidates();
+    selectionTarget.value = "results";
+    selected.value = null;
+    selectedPrompt.value = null;
+    selectedGeometry.value = null;
+    tool.value =
+      task.value === "detection"
+        ? "box"
+        : tool.value === "promptbox"
+          ? "promptbox"
+          : "positive";
+    if (task.value === "segmentation")
+      promptStatus.value =
+        tool.value === "promptbox"
+          ? "Draw a box prompt to start a new object."
+          : "Click a foreground point to start a new object.";
+  }
+  function selectPrompt(id: string, prompt: number | "box") {
+    const obj = annotation.value?.instances.find((o) => o.id === id);
+    if (
+      navigating.value ||
+      !obj ||
+      (prompt === "box"
+        ? !obj.prompt_box
+        : !Number.isInteger(prompt) ||
+          prompt < 0 ||
+          prompt >= obj.points.length)
+    )
+      return;
+    tool.value = "select";
+    selectionTarget.value = "prompts";
+    selected.value = id;
+    selectedGeometry.value = null;
+    selectedPrompt.value = prompt;
+  }
+  function promptsChanged() {
+    cancelInteractive();
+    if (candidates.value) return; // Candidate mode owns its own regeneration.
+    const obj = object.value;
+    if (
+      !obj ||
+      obj.locked ||
+      obj.hidden ||
+      annotation.value?.excluded ||
+      navigating.value
+    )
+      return;
+    if (!(obj.box || obj.prompt_box || obj.points.length)) return;
+    promptStatus.value = "Waiting to update mask…";
+    promptTimer = setTimeout(() => {
+      promptQueued = true;
+      void updatePromptMask();
+    }, 350);
+  }
+  async function updatePromptMask() {
+    if (candidateFlight || !promptQueued || candidates.value) return;
+    promptQueued = false;
+    const obj = object.value,
+      image = current.value,
+      ann = annotation.value;
+    if (
+      !obj ||
+      !image ||
+      !ann ||
+      obj.locked ||
+      obj.hidden ||
+      ann.excluded ||
+      navigating.value
+    )
+      return;
+    if (!(obj.box || obj.prompt_box || obj.points.length)) return;
+    const token = promptGeneration,
+      generation = viewGeneration,
+      editVersion = version;
+    const instanceId = obj.id,
+      projectId = meta.value?.id;
+    const settings = JSON.stringify(parameters("segmentation"));
+    const valid = () =>
+      token === promptGeneration &&
+      generation === viewGeneration &&
+      annotation.value === ann &&
+      selected.value === instanceId &&
+      current.value?.id === image.id &&
+      version === editVersion &&
+      !obj.locked &&
+      !obj.hidden &&
+      !ann.excluded &&
+      settings === JSON.stringify(parameters("segmentation")) &&
+      !candidates.value;
+    candidateFlight = true;
+    let accepted = false;
+    promptStatus.value = "Updating mask…";
+    try {
+      await save();
+      if (!valid()) return;
+      const revision = ann.revision;
+      const result = await request<MaskCandidates>(
+        `/images/${image.id}/mask-candidates`,
+        "POST",
+        {
+          ...parameters("segmentation"),
+          instance_id: instanceId,
+          expected_revision: revision,
+          project_id: projectId,
+          multimask_output: false,
+        },
+      );
+      if (
+        !valid() ||
+        ann.revision !== revision ||
+        result.revision !== revision ||
+        result.project_id !== projectId ||
+        result.image_id !== image.id ||
+        result.instance_id !== instanceId
+      )
+        return;
+      const mask = result.items[0];
+      if (!mask)
+        throw new Error(
+          "No mask returned; existing annotations were preserved",
+        );
+      checkpoint();
+      obj.mask = mask.mask;
+      obj.polygons = mask.polygons;
+      obj.source = result.model;
+      ann.segmentation_review = "pending";
+      ann.explicit_empty.segmentation = false;
+      changed("segmentation");
+      accepted = true;
+      await save();
+      if (token === promptGeneration) promptStatus.value = "Mask updated";
+    } catch (e) {
+      if (token === promptGeneration && generation === viewGeneration) {
+        error.value = String(e);
+        promptStatus.value = accepted
+          ? "Mask generated but could not be saved. Your edits were kept; retry saving."
+          : "Mask update failed; existing mask was kept. Retry with Refine mask.";
+      }
+    } finally {
+      candidateFlight = false;
+      if (token === promptGeneration && promptStatus.value === "Updating mask…")
+        promptStatus.value = "";
+      if (candidateQueued && candidates.value) {
+        candidateQueued = false;
+        void generateCandidates(true);
+      } else if (promptQueued) void updatePromptMask();
+    }
+  }
+  const canClearImageAnnotations = computed(
+    () =>
+      !navigating.value &&
+      !!current.value &&
+      !!annotation.value?.instances.length,
+  );
+  function clearImageAnnotations(includeLocked = false) {
+    const ann = annotation.value;
+    if (
+      !ann ||
+      !canClearImageAnnotations.value ||
+      !ann.instances.some((o) => includeLocked || !o.locked)
+    )
+      return;
+    checkpoint();
+    cancelInteractive();
+    cancelCandidates();
+    const remaining = ann.instances.filter((o) => o.locked && !includeLocked);
+    if (!remaining.some((o) => o.id === selected.value)) selected.value = null;
+    selectedGeometry.value = null;
+    selectedPrompt.value = null;
+    // Replacing the editing context also invalidates any unfinished canvas gesture.
+    annotation.value = {
+      ...ann,
+      instances: remaining,
+      detection_review: "pending",
+      segmentation_review: "pending",
+      explicit_empty: {
+        ...ann.explicit_empty,
+        detection: false,
+        segmentation: false,
+      },
+    };
+    changed(true);
+  }
+  const canClearAllPrompts = computed(
+    () =>
+      !navigating.value &&
+      !!current.value &&
+      !!annotation.value?.instances.some(
+        (o) => !o.locked && (o.points.length || o.prompt_box),
+      ),
+  );
+  function clearAllPrompts() {
+    const ann = annotation.value;
+    if (!ann || !canClearAllPrompts.value) return;
+    checkpoint();
+    cancelInteractive();
+    cancelCandidates();
+    const cleared = new Set<string>();
+    for (const obj of ann.instances) {
+      if (obj.locked || !(obj.points.length || obj.prompt_box)) continue;
+      obj.points = [];
+      obj.prompt_box = null;
+      cleared.add(obj.id);
+    }
+    ann.instances = ann.instances.filter(
+      (o) => !cleared.has(o.id) || o.box || o.mask || o.polygons.length,
+    );
+    if (!ann.instances.some((o) => o.id === selected.value))
+      selected.value = null;
+    selectedPrompt.value = null;
+    changed("segmentation");
+    promptStatus.value = "All unlocked prompts on this image were cleared.";
+  }
+  function deletePrompt(clear = false) {
+    const obj = object.value;
+    if (!obj || obj.locked || navigating.value) return;
+    if (!clear && selectedPrompt.value === null) return;
+    checkpoint();
+    if (clear) {
+      obj.points = [];
+      obj.prompt_box = null;
+    } else if (selectedPrompt.value === "box") obj.prompt_box = null;
+    else if (typeof selectedPrompt.value === "number")
+      obj.points.splice(selectedPrompt.value, 1);
+    selectedPrompt.value = null;
+    changed("segmentation");
+    if (clear) {
+      cancelInteractive();
+      cancelCandidates();
+    } else promptsChanged();
+  }
+  watch(
+    [
+      selected,
+      () => meta.value?.session,
+      () => meta.value?.id,
+      () => meta.value?.root,
+      () => current.value?.id,
+      tool,
+      task,
+      () => JSON.stringify(parameters("segmentation")),
+      () =>
+        JSON.stringify(models.value?.models.find((m) => m.id === model.value)),
+      navigating,
+    ],
+    () => {
+      selectedPrompt.value = null;
+      selectedGeometry.value = null;
+      cancelInteractive();
+    },
+    { flush: "sync" },
+  );
   interface CandidateSession {
     phase: "loading" | "ready" | "error" | "applying";
     response: MaskCandidates | null;
@@ -200,6 +541,7 @@ export const useProject = defineStore("project", () => {
     candidates.value = null;
   }
   async function generateCandidates(regenerate = false) {
+    cancelInteractive();
     if (
       !canGenerateCandidates.value ||
       !current.value ||
@@ -274,7 +616,7 @@ export const useProject = defineStore("project", () => {
       if (candidateQueued && candidates.value) {
         candidateQueued = false;
         void generateCandidates(true);
-      }
+      } else if (promptQueued) void updatePromptMask();
     }
   }
   async function applyCandidate() {
@@ -390,6 +732,7 @@ export const useProject = defineStore("project", () => {
     { flush: "sync" },
   );
   onScopeDispose(() => {
+    cancelInteractive();
     clearTimeout(candidateTimer);
     clearTimeout(candidateNoticeTimer);
     cancelCandidates();
@@ -481,7 +824,14 @@ export const useProject = defineStore("project", () => {
       if (
         task.value === "segmentation" &&
         autoSegment.value &&
-        loaded.instances.some((o) => o.box && !o.mask && !o.polygons.length)
+        !loaded.excluded &&
+        loaded.segmentation_review === "pending" &&
+        !models.value?.missing_dependencies?.length &&
+        models.value?.models.some((m) => m.id === model.value && m.available) &&
+        loaded.instances.some(
+          (o) =>
+            !o.locked && !o.hidden && o.box && !o.mask && !o.polygons.length,
+        )
       )
         void segment(true);
     } catch (e) {
@@ -582,6 +932,36 @@ export const useProject = defineStore("project", () => {
       changed(true);
     } else defaultClass.value = id;
   }
+  function deleteSelected() {
+    if (selectedPrompt.value !== null) deletePrompt();
+    else if (selectedGeometry.value) removeGeometry(selectedGeometry.value);
+    else remove();
+  }
+  function removeGeometry(geometry: "box" | "mask") {
+    const obj = object.value,
+      ann = annotation.value;
+    if (!obj || !ann || obj.locked || navigating.value) return;
+    checkpoint();
+    cancelInteractive();
+    cancelCandidates();
+    if (geometry === "box") obj.box = null;
+    else {
+      obj.mask = null;
+      obj.polygons = [];
+    }
+    if (!(
+      obj.box ||
+      obj.mask ||
+      obj.polygons.length ||
+      obj.prompt_box ||
+      obj.points.length
+    )) {
+      ann.instances = ann.instances.filter((o) => o.id !== obj.id);
+      selected.value = null;
+    }
+    selectedGeometry.value = null;
+    changed(geometry === "box" ? "detection" : "segmentation");
+  }
   function remove() {
     if (navigating.value || !object.value || object.value.locked) return;
     checkpoint();
@@ -610,6 +990,7 @@ export const useProject = defineStore("project", () => {
         ann.segmentation_review = "uncertain";
     }
     changed(prompt ? "segmentation" : "detection");
+    if (prompt) promptsChanged();
   }
   function undo(redo = false) {
     if (navigating.value || !annotation.value) return;
@@ -639,7 +1020,9 @@ export const useProject = defineStore("project", () => {
     return [
       JSON.stringify([
         value.excluded,
-        value.instances.map((o) => [o.id, o.class_id, o.box]),
+        value.instances
+          .filter((o) => o.box)
+          .map((o) => [o.id, o.class_id, o.box]),
       ]),
       JSON.stringify([
         value.excluded,
@@ -662,6 +1045,38 @@ export const useProject = defineStore("project", () => {
   async function segment(onlyMissing = false, text = "") {
     cancelCandidates();
     if (!annotation.value || !current.value) return;
+    cancelInteractive();
+    if (
+      !text &&
+      (onlyMissing || !object.value) &&
+      !annotation.value.instances.some(
+        (o) =>
+          !o.locked &&
+          !o.hidden &&
+          !o.mask &&
+          !o.polygons.length &&
+          (o.box || o.prompt_box || o.points.length),
+      )
+    ) {
+      promptStatus.value =
+        "No missing masks to generate. Select an object to refine, or add a point or box prompt.";
+      error.value = "";
+      return;
+    }
+    if (
+      !onlyMissing &&
+      !text &&
+      object.value &&
+      !(
+        object.value &&
+        (object.value.box ||
+          object.value.prompt_box ||
+          object.value.points.length)
+      )
+    ) {
+      promptStatus.value = "Select an object with points or a box prompt";
+      return;
+    }
     const generation = viewGeneration;
     try {
       await save();
@@ -802,12 +1217,31 @@ export const useProject = defineStore("project", () => {
     search,
     filtered,
     object,
+    selectedPrompt,
+    selectedGeometry,
+    selectionTarget,
+    activateSelection,
+    selectGeometry,
+    newObject,
+    removeGeometry,
+    selectPrompt,
+    promptsChanged,
+    promptStatus,
+    deletePrompt,
+    clearAllPrompts,
+    clearImageAnnotations,
+    canClearImageAnnotations,
+    canClearAllPrompts,
+    deleteSelected,
     history,
     future,
     autoSegment,
     autoDetect,
+    setReview,
+    setExplicitEmpty,
     detectionModel,
     parameters,
+    boxPadding,
     refreshMeta,
     applyModel,
     refreshCurrent,

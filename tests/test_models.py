@@ -122,7 +122,7 @@ def test_shipped_presets_and_bundled_detector(tmp_path, monkeypatch):
     monkeypatch.delenv("HF_MODELS", raising=False)
     monkeypatch.setattr(models, "missing_inference_dependencies", lambda: [])
     registry = ModelRegistry(root / "models.json")
-    assert registry.config.default_model == "facebook/sam2.1-hiera-tiny"
+    assert registry.entry(registry.config.default_model).task == "segmentation"
     assert registry.config.default_detection_model == "yolo11n"
     for entry in registry.config.models:
         if entry.task == "segmentation":
@@ -137,9 +137,9 @@ def test_shipped_presets_and_bundled_detector(tmp_path, monkeypatch):
     hf = tmp_path / "hf"
     model = hf / registry.config.default_model
     model.mkdir(parents=True)
-    (model / "sam2.1_hiera_tiny.pt").touch()
+    (model / "sam2.1_hiera_test.pt").touch()
     monkeypatch.setenv("HF_MODELS", str(hf))
-    assert registry.weights("") == model / "sam2.1_hiera_tiny.pt"
+    assert registry.weights("") == model / "sam2.1_hiera_test.pt"
     assert registry.startup_warnings() == []
 
 

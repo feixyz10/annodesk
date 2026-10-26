@@ -307,3 +307,26 @@ def test_late_initializer_returns_committed_record_without_overwriting_it(tmp_pa
     assert returned.model_dump() == committed.model_dump()
     assert path.read_bytes() == before
     project.validate_fingerprints(image_id)
+
+
+@pytest.mark.parametrize("task", ["detection", "segmentation"])
+def test_new_empty_approval_requires_explicit_confirmation(tmp_path, task):
+    from tests.test_lifecycle import make_project
+
+    project, image = make_project(tmp_path)
+    ann = project.annotation(image)
+    ann.instances = []
+    project.save(image, ann)
+    ann = project.annotation(image)
+    setattr(ann, f"{task}_review", "uncertain")
+    project.save(image, ann)
+    ann = project.annotation(image)
+    setattr(ann, f"{task}_review", "ok")
+    with pytest.raises(ValueError, match="explicitly confirm"):
+        project.save(image, ann)
+    ann.explicit_empty[task] = True
+    saved = project.save(image, ann)
+    assert getattr(saved, f"{task}_review") == "ok"
+    saved.explicit_empty[task] = False
+    with pytest.raises(ValueError, match="explicitly confirm"):
+        project.save(image, saved)

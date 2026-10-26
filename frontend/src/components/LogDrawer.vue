@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t, uiError, formatTime } from "../i18n";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { NDrawer, NDrawerContent } from "naive-ui";
+import { NModal } from "naive-ui";
 import { apiBase, request } from "../api";
 import { useProject } from "../stores/project";
 const props = defineProps<{ show: boolean }>();
@@ -175,102 +175,106 @@ onBeforeUnmount(() => {
 });
 </script>
 <template>
-  <NDrawer
+  <NModal
     :show="show"
     @update:show="emit('update:show', $event)"
-    :width="640"
-    resizable
-    :max-width="1200"
-    style="max-width: 100vw"
+    preset="card"
+    :title="t('Logs')"
+    style="
+      width: 960px;
+      max-width: 92vw;
+      max-height: 85vh;
+      overflow: hidden;
+      resize: both;
+    "
+    content-style="overflow:auto;min-height:0"
   >
-    <NDrawerContent :title="t('Logs')" closable>
-      <div class="log-controls">
-        <select v-model="scope" :aria-label="t('Log scope')">
-          <option value="service">{{ t("Service") }}</option>
-          <option value="project" :disabled="!store.meta">
-            {{ t("Current project") }}
-          </option>
-        </select>
-        <select v-model="comparison" :aria-label="t('Level comparison')">
-          <option value="gte">≥</option>
-          <option value="eq">=</option>
-        </select>
-        <select v-model="level" :aria-label="t('Log level')">
-          <option
-            v-for="item in [
-              [20, 'INFO'],
-              [25, 'SUCCESS'],
-              [30, 'WARNING'],
-              [40, 'ERROR'],
-              [50, 'CRITICAL'],
-            ]"
-            :value="item[0]"
-          >
-            {{ item[1] }}
-          </option>
-        </select>
-        <button @click="paused = !paused">
-          {{ paused ? t("Resume") : t("Pause") }}</button
-        ><button @click="clearView">{{ t("Clear view") }}</button
-        ><button @click="copy">{{ t("Copy") }}</button>
-        <label
-          ><input v-model="autoScroll" type="checkbox" />
-          {{ t("Auto-scroll") }}</label
+    <div class="log-controls">
+      <select v-model="scope" :aria-label="t('Log scope')">
+        <option value="service">{{ t("Service") }}</option>
+        <option value="project" :disabled="!store.meta">
+          {{ t("Current project") }}
+        </option>
+      </select>
+      <select v-model="comparison" :aria-label="t('Level comparison')">
+        <option value="gte">≥</option>
+        <option value="eq">=</option>
+      </select>
+      <select v-model="level" :aria-label="t('Log level')">
+        <option
+          v-for="item in [
+            [20, 'INFO'],
+            [25, 'SUCCESS'],
+            [30, 'WARNING'],
+            [40, 'ERROR'],
+            [50, 'CRITICAL'],
+          ]"
+          :value="item[0]"
         >
-        <a
-          :href="apiBase + '/logs/download'"
-          download
-          :title="t('Download the current backend log file')"
-          >{{ t("Download") }}</a
-        >
-      </div>
-      <p class="muted">
-        {{ t("Current backend session ·") }} {{ rows.length
-        }}{{
-          t(
-            "/1000 events. Independent CLI sessions are available in their log files.",
-          )
-        }}
-      </p>
-      <p v-if="gap" role="status">
-        {{ t("Some earlier events are no longer available.") }}
-      </p>
-      <p v-if="error" role="status">
-        {{ uiError(error) }}
-        <button @click="connect()">{{ t("Retry") }}</button>
-      </p>
-      <div
-        ref="viewport"
-        class="log-viewport"
-        @scroll="scroll = ($event.target as HTMLElement).scrollTop"
-        role="log"
-        :aria-label="t('Important service events')"
+          {{ item[1] }}
+        </option>
+      </select>
+      <button @click="paused = !paused">
+        {{ paused ? t("Resume") : t("Pause") }}</button
+      ><button @click="clearView">{{ t("Clear view") }}</button
+      ><button @click="copy">{{ t("Copy") }}</button>
+      <label
+        ><input v-model="autoScroll" type="checkbox" />
+        {{ t("Auto-scroll") }}</label
       >
-        <p v-if="!rows.length" class="muted">
-          {{ paused ? t("Paused") : t("No matching events yet") }}
-        </p>
-        <div :style="{ height: rows.length * 72 + 'px', position: 'relative' }">
-          <div
-            v-for="item in visibleRows"
-            :key="item.row.session_id + item.row.sequence"
-            class="log-row"
-            :style="{ top: item.top + 'px' }"
+      <a
+        :href="apiBase + '/logs/download'"
+        download
+        :title="t('Download the current backend log file')"
+        >{{ t("Download") }}</a
+      >
+    </div>
+    <p class="muted">
+      {{ t("Current backend session ·") }} {{ rows.length
+      }}{{
+        t(
+          "/1000 events. Independent CLI sessions are available in their log files.",
+        )
+      }}
+    </p>
+    <p v-if="gap" role="status">
+      {{ t("Some earlier events are no longer available.") }}
+    </p>
+    <p v-if="error" role="status">
+      {{ uiError(error) }}
+      <button @click="connect()">{{ t("Retry") }}</button>
+    </p>
+    <div
+      ref="viewport"
+      class="log-viewport"
+      @scroll="scroll = ($event.target as HTMLElement).scrollTop"
+      role="log"
+      :aria-label="t('Important service events')"
+    >
+      <p v-if="!rows.length" class="muted">
+        {{ paused ? t("Paused") : t("No matching events yet") }}
+      </p>
+      <div :style="{ height: rows.length * 72 + 'px', position: 'relative' }">
+        <div
+          v-for="item in visibleRows"
+          :key="item.row.session_id + item.row.sequence"
+          class="log-row"
+          :style="{ top: item.top + 'px' }"
+        >
+          <time :title="item.row.timestamp">{{
+            formatTime(item.row.timestamp)
+          }}</time>
+          <b :class="'level-' + item.row.level_name.toLowerCase()">{{
+            item.row.level_name
+          }}</b>
+          <span :title="item.row.message"
+            >{{ item.row.message
+            }}{{ item.row.truncated ? t("… [see file]") : "" }}</span
           >
-            <time :title="item.row.timestamp">{{
-              formatTime(item.row.timestamp)
-            }}</time>
-            <b :class="'level-' + item.row.level_name.toLowerCase()">{{
-              item.row.level_name
-            }}</b>
-            <span :title="item.row.message"
-              >{{ item.row.message
-              }}{{ item.row.truncated ? t("… [see file]") : "" }}</span
-            >
-          </div>
         </div>
       </div>
-    </NDrawerContent>
-  </NDrawer>
+    </div>
+  </NModal>
 </template>
 <style scoped>
 .log-controls {
@@ -283,7 +287,7 @@ onBeforeUnmount(() => {
   color: var(--accent);
 }
 .log-viewport {
-  height: calc(100dvh - 240px);
+  height: min(55vh, 600px);
   min-height: 160px;
   overflow: auto;
   border-top: 1px solid var(--line);

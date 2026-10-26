@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BoxPaddingControls from "./BoxPaddingControls.vue";
 import { t, uiError } from "../i18n";
 import { computed, ref, watch } from "vue";
 import { NModal } from "naive-ui";
@@ -73,25 +74,41 @@ watch(
     busy.value = "";
   },
 );
-async function inspect() {
+// Every action uses a frozen configuration and project session. A late preflight
+// must not start work after the window closes or the project changes.
+async function run(startJob: boolean) {
+  if (busy.value || !props.show || !store.meta || !states.value.length) return;
   const token = ++generation,
-    project = store.meta?.id;
+    project = store.meta.id,
+    session = store.meta.session,
+    snapshot = JSON.parse(JSON.stringify(payload.value));
+  const current = () =>
+    token === generation &&
+    props.show &&
+    project === store.meta?.id &&
+    session === store.meta?.session;
   busy.value = "Checking scope…";
   error.value = "";
   try {
-    const snapshot = JSON.parse(JSON.stringify(payload.value));
+    if (startJob) {
+      await store.save();
+      if (!current()) return;
+    }
     const result = await request<ScopePreview>(
       "/jobs/preview",
       "POST",
       snapshot,
     );
+    if (!current()) return;
+    preview.value = result;
     let compatibility: ModelCheck | null = null;
-    if (operation.value === "detection") {
+    if (snapshot.operation === "detection") {
       compatibility = await request<ModelCheck>(
         "/models/check",
         "POST",
         snapshot,
       );
+      if (!current()) return;
       if (
         !snapshot.allow_new_classes &&
         !compatibility.compatibility?.accepted_classes
@@ -100,35 +117,25 @@ async function inspect() {
           "No classes are accepted. Enable new classes in Model settings or define compatible project classes.",
         );
     }
-    if (token === generation && project === store.meta?.id) {
-      preview.value = result;
-      check.value = compatibility;
-    }
-  } catch (e) {
-    if (token === generation) error.value = String(e);
-  } finally {
-    if (token === generation) busy.value = "";
-  }
-}
-async function start() {
-  if (!preview.value) return;
-  const token = ++generation,
-    project = store.meta?.id;
-  busy.value = "Starting…";
-  error.value = "";
-  try {
-    const snapshot = JSON.parse(JSON.stringify(payload.value));
-    await store.save();
+    check.value = compatibility;
+    if (!startJob || !result.total) return;
+    busy.value = "Starting…";
     await request("/jobs", "POST", snapshot);
-    if (token === generation && project === store.meta?.id) {
+    if (current()) {
       emit("update:show", false);
       emit("started");
     }
   } catch (e) {
-    if (token === generation) error.value = String(e);
+    if (current()) error.value = String(e);
   } finally {
     if (token === generation) busy.value = "";
   }
+}
+function inspect() {
+  return run(false);
+}
+function start() {
+  return run(true);
 }
 </script>
 <template>
@@ -257,6 +264,7 @@ async function start() {
       >
     </section>
     <section v-if="operation === 'boxes_from_masks'">
+      <BoxPaddingControls :disabled="!!busy" />
       <label
         ><input v-model="recalculate" type="checkbox" :disabled="!!busy" />
         {{ t("Recalculate existing unlocked boxes") }}</label
@@ -314,7 +322,11 @@ async function start() {
         {{ t("Preview scope") }}</button
       ><button
         class="primary"
-        :disabled="!!busy || !preview?.total"
+        :disabled="
+          !!busy ||
+          !states.length ||
+          (operation !== 'boxes_from_masks' && !payload.model)
+        "
         @click="start"
       >
         {{ t("Start") }}

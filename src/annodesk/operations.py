@@ -127,6 +127,15 @@ def compute_boxes(path, size, annotation, body, adapter):
             if box is None:
                 annotation.operation_stats["empty_masks"] += 1
                 continue
+            x1, y1, x2, y2 = box
+            px = body.box_padding_pixels
+            dx = (x2 - x1) * body.box_padding_ratio
+            dy = (y2 - y1) * body.box_padding_ratio
+            if body.box_padding_min:
+                dx, dy = min(px, dx), min(px, dy)
+            elif body.box_padding_mode == "pixels":
+                dx = dy = px
+            box = [max(0, x1 - dx), max(0, y1 - dy), min(size[0], x2 + dx), min(size[1], y2 + dy)]
             if box != obj.box:
                 annotation.operation_stats["boxes_updated" if obj.box else "boxes_added"] += 1
                 obj.box, obj.box_source = box, "mask"

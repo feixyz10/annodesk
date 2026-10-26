@@ -89,7 +89,7 @@ class BatchJobs:
                 self.persist(job)
             # run_batch has already persisted/logged the actionable error.
 
-    def export(self, task, format, include_pending):
+    def export(self, task, format, include_pending, output=None, expected_signature=None):
         from annodesk.lifecycle import export_project
 
         with self.lock:
@@ -113,6 +113,8 @@ class BatchJobs:
             self.records[job["id"]] = job
             self.persist(job)
 
+        destination = output
+
         def run():
             try:
                 job["phase"] = "running"
@@ -128,11 +130,21 @@ class BatchJobs:
                     include_pending,
                     progress=progress,
                     cancelled=lambda: job["cancel"],
+                    output=destination,
+                    expected_signature=expected_signature,
                 )
-                job.update(status="complete", phase="complete", output=str(output))
+                report = json.loads((output / "report.json").read_text())
+                job.update(
+                    status="complete",
+                    phase="complete",
+                    output=str(output),
+                    processed=report["exported"],
+                    skipped=len(report["skipped"]),
+                    completed=job["total"],
+                )
                 self.events.emit(
                     "SUCCESS",
-                    f"Export saved: {output}",
+                    f"Export saved: {output} · {report['exported']} images, {len(report['skipped'])} skipped",
                     event_type="export_complete",
                     project_id=self.service.project.metadata["id"],
                     job_id=job["id"],

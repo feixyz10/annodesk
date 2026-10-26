@@ -185,3 +185,42 @@ export interface MaskCandidates {
   model: string;
   items: MaskCandidate[];
 }
+
+export interface ClassStatistics {
+  class_id: string | null;
+  index: number | null;
+  name: string | null;
+  color: string;
+  boxes: number;
+  masks: number;
+  instances: number;
+  images: number;
+}
+export interface ProjectStatistics {
+  total: number;
+  counts: Record<string, number>;
+  reviewed: number;
+  statistics_revision: number;
+  status: string;
+  boxes: number;
+  masks: number;
+  instances: number;
+  classes: ClassStatistics[];
+  include_excluded: boolean;
+  invalid_images: number;
+}
+
+export interface ExportPreview {
+  skipped_by_state: Record<string, number>;
+  skipped_no_valid_annotations: Record<string, number>;
+  no_valid_annotations: Record<string, number>;
+  skipped_images: Array<{ image: string; reason: string }>;
+  total: number;
+  counts: Record<string, number>;
+  eligible: number;
+  skipped: Record<string, number>;
+  errors: Array<{ image: string; error: string }>;
+  signature: string;
+  output: string;
+  already_exported: boolean;
+}

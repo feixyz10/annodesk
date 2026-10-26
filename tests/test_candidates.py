@@ -39,6 +39,8 @@ def setup(root, *, mask_only=True):
         obj.prompt_box, obj.box = obj.box, None
     annotation.detection_review = annotation.segmentation_review = "ok"
     annotation.explicit_empty["segmentation"] = True
+    if mask_only:
+        annotation.explicit_empty["detection"] = True
     annotation = project.save(image_id, annotation)
     body = CandidateRequest(
         model="test",
@@ -235,3 +237,26 @@ def test_batch_rejects_semantic_text_instead_of_multi_object_output(tmp_path):
     with pytest.raises(ValueError, match="single masks"):
         run_batch(project, registry, body, report, EventLog(), lambda: None)
     assert report["status"] == "failed" and report["processed"] == 0
+
+
+def test_single_mask_prompt_preview_uses_predict_and_never_writes(tmp_path):
+    project, _, image_id, body = setup(tmp_path)
+    original = project.annotation(image_id).model_dump()
+
+    class Single:
+        def predict(self, path, model, box, points, text):
+            assert model == "test" and box and text == ""
+            mask = np.zeros((20, 30), dtype=np.uint8)
+            mask[2:8, 3:9] = 1
+            return [mask, mask]
+
+        def predict_candidates(self, *_):
+            pytest.fail("Single-mask interaction must not call multimask inference")
+
+    result = preview_candidates(
+        project, image_id, body.model_copy(update={"multimask_output": False}), Single()
+    )
+    assert len(result["items"]) == 1
+    assert result["items"][0]["quality"] is None
+    assert decode_mask(result["items"][0]["mask"]).sum() == 36
+    assert project.annotation(image_id).model_dump() == original

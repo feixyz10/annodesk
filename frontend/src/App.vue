@@ -14,12 +14,11 @@ import {
   ref,
   computed,
   watch,
+  nextTick,
   defineAsyncComponent,
 } from "vue";
 import {
   NConfigProvider,
-  NDrawer,
-  NDrawerContent,
   NModal,
   NButton,
   enUS,
@@ -48,6 +47,9 @@ const BatchSetup = defineAsyncComponent(
   () => import("./components/BatchSetup.vue"),
 );
 import TaskWindow from "./components/TaskWindow.vue";
+import ClearImageAnnotations from "./components/ClearImageAnnotations.vue";
+import ExportSetup from "./components/ExportSetup.vue";
+import WorkspaceInspector from "./components/WorkspaceInspector.vue";
 import { type Job, isPreparing } from "./tasks";
 import { reviewStates } from "./review";
 import { readPreference, writePreference } from "./preferences";
@@ -58,38 +60,101 @@ const store = useProject(),
   classesOpen = ref(false),
   tagsOpen = ref(false),
   help = ref(false),
+  inspectorOpen = ref(false),
+  inspectorCollapsed = ref(false),
   promptText = ref(""),
+  textPromptInput = ref<HTMLTextAreaElement>(),
+  emptyConfirmation = ref<HTMLInputElement>(),
+  clearAnnotationsOpen = ref(false),
+  exportOpen = ref(false),
   keySearch = ref("");
+const approvalWarning = computed(
+  () =>
+    store.error.replace(/^Error: /, "") ===
+    "Add annotations or explicitly confirm no objects before approving this task",
+);
+let focusEmptyAfterClose = false;
+function openApprovalProperties() {
+  focusEmptyAfterClose = true;
+  inspectorCollapsed.value = false;
+  inspectorOpen.value = true;
+  store.error = "";
+}
+async function approvalClosed() {
+  if (!focusEmptyAfterClose) return;
+  focusEmptyAfterClose = false;
+  await nextTick();
+  emptyConfirmation.value?.scrollIntoView({ block: "center" });
+  emptyConfirmation.value?.focus();
+}
 const left = ref(Number(readPreference("lb-left")) || 260),
-  right = ref(Number(readPreference("lb-right")) || 290),
+  right = ref(Number(readPreference("annodesk-inspector-width")) || 340),
   top = ref(Number(readPreference("lb-top")) || 53);
+watch(
+  () => store.tool,
+  async (tool) => {
+    if (tool === "text") {
+      await nextTick();
+      textPromptInput.value?.focus();
+    }
+  },
+);
+function submitTextPrompt() {
+  if (promptText.value.trim() && store.current && !store.navigating)
+    void store.segment(false, promptText.value);
+}
 const shortcuts = [
   ["Previous / next image", "A / D or ← / →"],
-  ["Select / draw box", "V / R"],
-  ["Positive / negative point", "Q / E"],
-  ["Box / text prompt", "B / T"],
-  ["Accept segmentation", "Enter"],
+  ["Select", "V"],
+  ["Detection box", "R"],
+  ["Positive point", "Q"],
+  ["Negative point", "E"],
+  ["SAM box prompt", "B"],
+  ["Text prompt (SAM 3)", "T"],
+  ["Start a new object", "N"],
+  ["Refine selected mask", "Enter"],
+  ["Preview text segmentation", "Ctrl+Enter or ⌘Enter"],
+  ["New line in text prompt", "Enter (text input focused)"],
   ["Apply / cancel mask candidate", "Enter / Esc"],
   ["Switch candidates (candidate bar focused)", "← / →"],
+  ["Class picker navigation", "↑ / ↓, Enter, Esc"],
+  ["Change selected annotation class", "C or double-click"],
+  ["Delete selected geometry, prompt or object", "X or Delete or Backspace"],
+  ["Delete whole object with all prompts", "Shift+X or Shift+Delete"],
+  ["Cancel selection or close the active window", "Esc"],
   ["Fit image", "F"],
   ["Pan", "Hold Space"],
-  ["Zoom in / out", "+ / -"],
-  ["Approve / needs review / exclude", "1 / 2 / 3"],
-  ["Change selected annotation class", "C or double-click"],
-  ["Delete selected", "X or Delete"],
+  ["Zoom in", "+ or ="],
+  ["Zoom out", "-"],
+  ["Zoom at pointer", "Mouse wheel"],
+  ["Approve current task", "1"],
+  ["Mark needs review", "2"],
+  ["Toggle excluded", "3"],
   ["Undo", "Ctrl+Z or ⌘Z"],
   ["Redo", "Ctrl+Shift+Z or ⌘Shift+Z"],
   ["Save", "Ctrl+S or ⌘S"],
   ["Shortcuts", "?"],
 ];
-const tools = [
-  ["select", "Select", "V"],
-  ["box", "Draw box", "R"],
-  ["positive", "Positive point", "Q"],
-  ["negative", "Negative point", "E"],
-  ["promptbox", "Box prompt: mask only", "B"],
-  ["text", "Text prompt (SAM 3)", "T"],
+const toolGroups = [
+  {
+    label: "Labels",
+    description:
+      "Detection boxes are annotation results and are saved to labels/.",
+    items: [["box", "Detection box", "R"]],
+  },
+  {
+    label: "SAM",
+    description:
+      "SAM prompts guide mask generation; they are not detection labels.",
+    items: [
+      ["positive", "Positive point", "Q"],
+      ["negative", "Negative point", "E"],
+      ["promptbox", "SAM box prompt", "B"],
+      ["text", "Text prompt (SAM 3)", "T"],
+    ],
+  },
 ];
+
 async function openProject() {
   await store.open(path.value);
   if (store.meta) openDialog.value = false;
@@ -115,15 +180,15 @@ function resize(e: PointerEvent, side: string) {
       );
     else
       right.value = Math.max(
-        220,
-        Math.min(460, initial - event.clientX + startX),
+        300,
+        Math.min(480, initial - event.clientX + startX),
       );
   };
   const done = () => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", done);
     writePreference(
-      "lb-" + side,
+      side === "right" ? "annodesk-inspector-width" : "lb-" + side,
       String(
         side === "left"
           ? left.value
@@ -137,24 +202,7 @@ function resize(e: PointerEvent, side: string) {
   window.addEventListener("pointerup", done, { once: true });
 }
 function review(value: string) {
-  if (!store.annotation) return;
-  store.checkpoint();
-  if (value === "excluded")
-    store.annotation.excluded = !store.annotation.excluded;
-  else
-    store.annotation[
-      store.task === "detection" ? "detection_review" : "segmentation_review"
-    ] = value as "ok" | "pending" | "uncertain";
-  store.changed();
-}
-function editBoxCoordinate(event: Event, index: number) {
-  const input = event.target as HTMLInputElement;
-  const obj = store.object;
-  if (!obj?.box) return;
-  const box = [...obj.box];
-  box[index] = input.valueAsNumber;
-  store.editBox(obj.id, box);
-  input.value = String(obj.box[index]);
+  store.setReview(value as "ok" | "pending" | "uncertain" | "excluded");
 }
 async function tags(value: string) {
   if (!store.annotation) return;
@@ -182,6 +230,22 @@ async function tags(value: string) {
 }
 function key(e: KeyboardEvent) {
   if (
+    document.querySelector(".annodesk-object-menu, .n-modal") ||
+    clearAnnotationsOpen.value ||
+    exportOpen.value
+  )
+    return;
+  if (e.key === "Escape" && store.tool === "text") {
+    store.activateSelection();
+    e.preventDefault();
+    return;
+  }
+  if (e.key === "Escape" && inspectorOpen.value) {
+    inspectorOpen.value = false;
+    e.preventDefault();
+    return;
+  }
+  if (
     store.navigating ||
     e.isComposing ||
     (e.target as HTMLElement).closest(
@@ -191,7 +255,9 @@ function key(e: KeyboardEvent) {
     classesOpen.value ||
     tagsOpen.value ||
     help.value ||
-    (e.target as HTMLElement).closest(".task-window, .mask-candidates") ||
+    (e.target as HTMLElement).closest(
+      ".task-window, .mask-candidates, .statistics-drawer",
+    ) ||
     logsOpen.value ||
     batchSettings.value ||
     modelSettings.value ||
@@ -231,6 +297,9 @@ function key(e: KeyboardEvent) {
   } else if (k === "d" || k === "arrowright") {
     e.preventDefault();
     store.move(1);
+  } else if (k === "v") {
+    e.preventDefault();
+    store.activateSelection();
   } else if (k === "c") {
     e.preventDefault();
     store.openClassPicker();
@@ -239,7 +308,11 @@ function key(e: KeyboardEvent) {
   else if (k === "-") canvas.value?.zoom(0.8);
   else if (k === "x" || k === "delete" || k === "backspace") {
     e.preventDefault();
-    store.remove();
+    if (e.shiftKey && k !== "backspace") store.remove();
+    else store.deleteSelected();
+  } else if (k === "n") {
+    e.preventDefault();
+    store.newObject();
   } else if (k === "?") help.value = true;
   else if (k === "escape") store.selected = null;
   else if (k === "enter") void store.segment();
@@ -247,7 +320,6 @@ function key(e: KeyboardEvent) {
     review({ "1": "ok", "2": "uncertain", "3": "excluded" }[k]!);
   else if (
     {
-      v: "select",
       r: "box",
       q: "positive",
       e: "negative",
@@ -256,23 +328,12 @@ function key(e: KeyboardEvent) {
     }[k]
   )
     store.tool = {
-      v: "select",
       r: "box",
       q: "positive",
       e: "negative",
       b: "promptbox",
       t: "text",
     }[k]!;
-}
-async function exportCurrent() {
-  try {
-    await store.save();
-    await request("/export/jobs", "POST", { task: store.task });
-    jobsOpen.value = true;
-    await refreshJobs();
-  } catch (e) {
-    store.error = String(e);
-  }
 }
 async function reindex() {
   try {
@@ -314,15 +375,12 @@ const activeJob = computed(() =>
 );
 let jobsGeneration = 0,
   lastClassRefresh = 0;
-watch(
-  () => [store.meta?.id, store.meta?.session],
-  () => {
-    jobsGeneration++;
-    jobs.value = [];
-    taskNotice.value = "";
-    void refreshJobs();
-  },
-);
+watch([() => store.meta?.id, () => store.meta?.session], () => {
+  jobsGeneration++;
+  jobs.value = [];
+  taskNotice.value = "";
+  void refreshJobs();
+});
 let jobsTimer: ReturnType<typeof setInterval>;
 async function refreshJobs() {
   if (!store.meta || document.hidden) return;
@@ -474,7 +532,7 @@ onBeforeUnmount(() => {
           <button
             :title="t('Export reviewed annotations for the current task')"
             :disabled="!store.meta"
-            @click="exportCurrent"
+            @click="exportOpen = true"
           >
             {{ t("Export") }}
           </button>
@@ -555,13 +613,24 @@ onBeforeUnmount(() => {
         </button>
       </div>
       <LogDrawer v-model:show="logsOpen" />
-      <div v-if="store.error" class="alert" role="alert">
-        {{ uiError(store.error)
-        }}<button @click="store.error = ''">{{ t("Dismiss") }}</button
-        ><button v-if="store.dirty" @click="store.save().catch(() => {})">
-          {{ t("Retry save") }}
-        </button>
-      </div>
+      <aside v-if="store.error && !approvalWarning" class="alert" role="alert">
+        <div class="notice-message">
+          <span>{{
+            uiError(store.error).length > 160
+              ? uiError(store.error).slice(0, 160) + "…"
+              : uiError(store.error)
+          }}</span>
+          <details v-if="uiError(store.error).length > 160">
+            <summary>{{ t("Details") }}</summary>
+            <p>{{ uiError(store.error) }}</p>
+          </details>
+        </div>
+        <div class="notice-actions">
+          <button v-if="store.dirty" @click="store.save().catch(() => {})">
+            {{ t("Retry save") }}</button
+          ><button @click="store.error = ''">{{ t("Dismiss") }}</button>
+        </div>
+      </aside>
       <ModelNotice
         :config="store.models"
         :task="store.task"
@@ -573,6 +642,7 @@ onBeforeUnmount(() => {
       />
       <main
         class="workspace"
+        :class="{ 'inspector-collapsed': inspectorCollapsed }"
         :style="{ '--left': left + 'px', '--right': right + 'px' }"
       >
         <aside class="left-panel">
@@ -597,68 +667,125 @@ onBeforeUnmount(() => {
           @pointerdown="resize($event, 'left')"
           @dblclick="left = 260"
         ></div>
-        <nav class="tools">
+        <nav class="tools" :aria-label="t('Annotation tools')">
           <button
-            v-for="[id, title, key] in tools"
-            :key="id"
-            :title="t(title) + ' · ' + key"
-            :aria-label="t(title)"
-            :class="{ active: store.tool === id }"
-            @click="store.tool = id"
+            :title="t('Select · V')"
+            :aria-label="t('Select')"
+            :class="{
+              active:
+                store.tool === 'select' && store.selectionTarget === 'results',
+            }"
+            @click="store.activateSelection()"
           >
-            <Icon :name="id" /></button
-          ><button :title="t('Undo · Ctrl+Z or ⌘Z')" @click="store.undo()">
-            ↶
+            <Icon name="select" />
           </button>
+          <button
+            :title="t('Edit SAM prompts')"
+            :aria-label="t('Edit SAM prompts')"
+            :aria-pressed="
+              store.tool === 'select' && store.selectionTarget === 'prompts'
+            "
+            :class="{
+              active:
+                store.tool === 'select' && store.selectionTarget === 'prompts',
+            }"
+            @click="store.activateSelection('prompts')"
+          >
+            <Icon name="promptselect" />
+          </button>
+          <div
+            v-for="group in toolGroups"
+            :key="group.label"
+            class="tool-group"
+            role="group"
+            :aria-label="t(group.description)"
+          >
+            <span class="tool-group-label" :title="t(group.description)">{{
+              t(group.label)
+            }}</span>
+            <button
+              v-for="[id, title, key] in group.items"
+              :key="id"
+              :title="t(title) + ' · ' + key + ' · ' + t(group.description)"
+              :aria-label="t(title)"
+              :class="{
+                active: store.tool === id,
+                'prompt-tool': group.label === 'SAM',
+              }"
+              @click="store.tool = id"
+            >
+              <Icon :name="id" />
+            </button>
+          </div>
+          <div class="tool-group" role="group" :aria-label="t('History')">
+            <span class="tool-group-label">{{ t("History") }}</span>
+            <button
+              :title="t('Undo · Ctrl+Z or ⌘Z')"
+              :aria-label="t('Undo')"
+              :disabled="!store.history.length"
+              @click="store.undo()"
+            >
+              <Icon name="undo" />
+            </button>
+            <button
+              :title="t('Redo · Ctrl+Shift+Z or ⌘Shift+Z')"
+              :aria-label="t('Redo')"
+              :disabled="!store.future.length"
+              @click="store.undo(true)"
+            >
+              <Icon name="redo" />
+            </button>
+          </div>
         </nav>
         <section class="center">
           <div class="canvasbar">
-            <button
-              class="model-summary"
-              :title="t('Choose a model, load it, and configure inference')"
-              @click="modelSettings = true"
-            >
-              <span class="model-summary-name"
-                >{{ store.task === "detection" ? t("Detector") : t("SAM") }}:
-                {{ currentModel?.name || t("Choose model") }}</span
+            <div class="canvas-main-controls">
+              <button
+                class="model-summary"
+                :title="t('Choose a model, load it, and configure inference')"
+                @click="modelSettings = true"
               >
-              <small>{{ t(currentModelState) }}</small>
-            </button>
-            <button
-              class="primary"
-              :disabled="
-                !store.meta ||
-                (store.task === 'detection' && !store.detectionModel)
-              "
-              @click="
-                store.task === 'detection'
-                  ? store.detect()
-                  : store.segment(true)
-              "
-            >
-              {{
-                store.task === "detection"
-                  ? t("Detect current")
-                  : t("Segment current")
-              }}
-            </button>
-            <label
-              v-if="store.task === 'segmentation'"
-              :title="t('Process missing masks when switching images')"
-              ><input v-model="store.autoSegment" type="checkbox" />
-              {{ t("Auto-segment") }}</label
-            >
-            <label
-              v-else
-              :title="t('Detect empty, unreviewed images when switching')"
-              ><input
-                v-model="store.autoDetect"
-                type="checkbox"
-                :disabled="!store.detectionModel"
-              />
-              {{ t("Auto-detect") }}</label
-            >
-            <span class="grow" />
+                <span class="model-summary-name"
+                  >{{ store.task === "detection" ? t("Detector") : t("SAM") }}:
+                  {{ currentModel?.name || t("Choose model") }}</span
+                >
+                <small>{{ t(currentModelState) }}</small>
+              </button>
+              <button
+                class="primary"
+                :disabled="
+                  !store.meta ||
+                  (store.task === 'detection' && !store.detectionModel)
+                "
+                @click="
+                  store.task === 'detection'
+                    ? store.detect()
+                    : store.segment(true)
+                "
+              >
+                {{
+                  store.task === "detection"
+                    ? t("Detect current")
+                    : t("Segment current")
+                }}
+              </button>
+              <label
+                v-if="store.task === 'segmentation'"
+                :title="t('Process missing masks when switching images')"
+                ><input v-model="store.autoSegment" type="checkbox" />
+                {{ t("Auto-segment") }}</label
+              >
+              <label
+                v-else
+                :title="t('Detect empty, unreviewed images when switching')"
+                ><input
+                  v-model="store.autoDetect"
+                  type="checkbox"
+                  :disabled="!store.detectionModel"
+                />
+                {{ t("Auto-detect") }}</label
+              >
+            </div>
             <div
               class="view-tools"
               role="toolbar"
@@ -695,15 +822,74 @@ onBeforeUnmount(() => {
                 <Icon name="fit" />
               </button>
             </div>
+            <div
+              class="inspector-controls"
+              role="group"
+              :aria-label="t('Properties')"
+            >
+              <button
+                class="inspector-toggle"
+                :aria-expanded="inspectorOpen"
+                aria-controls="image-details"
+                @click="inspectorOpen = !inspectorOpen"
+              >
+                {{ t("Image details") }}
+              </button>
+              <button
+                class="inspector-collapse-toggle"
+                :aria-expanded="!inspectorCollapsed"
+                :aria-label="t('Properties')"
+                aria-controls="image-details"
+                :title="t('Show or hide properties')"
+                @click="inspectorCollapsed = !inspectorCollapsed"
+              >
+                <Icon name="sidebar" />
+              </button>
+            </div>
           </div>
-          <div v-if="store.tool === 'text'" class="textbar">
-            <input
-              v-model="promptText"
-              :placeholder="t('English target description…')"
-            /><button @click="store.segment(false, promptText)">
-              {{ t("Preview text segmentation") }}
-            </button>
-          </div>
+          <form
+            v-if="store.tool === 'text'"
+            class="text-prompt-popover"
+            :aria-label="t('Text prompt')"
+            @submit.prevent="submitTextPrompt"
+            @keydown.ctrl.enter.prevent.stop="submitTextPrompt"
+            @keydown.meta.enter.prevent.stop="submitTextPrompt"
+            @keydown.esc.prevent.stop="store.activateSelection()"
+          >
+            <div class="text-prompt-heading">
+              <strong>{{ t("Text prompt") }}</strong
+              ><button
+                type="button"
+                :aria-label="t('Close text prompt')"
+                :title="t('Close text prompt · Esc')"
+                @click="store.activateSelection()"
+              >
+                <Icon name="close" />
+              </button>
+            </div>
+            <div class="text-prompt-input">
+              <textarea
+                rows="5"
+                ref="textPromptInput"
+                v-model="promptText"
+                :aria-label="t('Text prompt')"
+                :placeholder="t('English target description…')"
+              ></textarea>
+              <div class="text-prompt-footer">
+                <small>{{
+                  t("Enter: new line · Ctrl+Enter or ⌘Enter: preview")
+                }}</small
+                ><button
+                  type="submit"
+                  :disabled="
+                    !promptText.trim() || !store.current || store.navigating
+                  "
+                >
+                  {{ t("Preview text segmentation") }}
+                </button>
+              </div>
+            </div>
+          </form>
           <AnnotationCanvas ref="canvas" />
           <div v-if="!store.current" class="empty">
             <h2>{{ t("Open an image dataset") }}</h2>
@@ -728,212 +914,132 @@ onBeforeUnmount(() => {
           :aria-label="t('Resize right panel')"
           aria-orientation="vertical"
           @pointerdown="resize($event, 'right')"
-          @dblclick="right = 290"
+          @dblclick="right = 340"
         ></div>
-        <aside class="right-panel">
-          <div class="section">
-            <strong>{{ t("Current image") }}</strong>
-            <p class="muted ellipsis" :title="store.current?.path">
-              {{ store.current?.path ?? "—" }}
-            </p>
-            <div class="row task-switch">
-              <button
-                v-for="task in ['detection', 'segmentation'] as const"
-                :class="{ active: store.task === task }"
-                @click="store.task = task"
+        <aside
+          id="image-details"
+          class="right-panel"
+          :class="{ 'is-open': inspectorOpen }"
+          :aria-label="t('Image details')"
+        >
+          <button class="inspector-close" @click="inspectorOpen = false">
+            {{ t("Close image details") }}
+          </button>
+          <WorkspaceInspector>
+            <template #actions>
+              <div
+                class="image-annotation-actions"
+                role="group"
+                :aria-label="t('Image annotation actions')"
               >
-                {{ taskLabel(task) }}
-              </button>
-            </div>
-          </div>
-          <template v-if="store.annotation"
-            ><div class="section">
-              <h3>{{ t("Image review") }}</h3>
-              <div class="review">
                 <button
-                  v-for="{ value, label } in reviewStates"
+                  class="danger"
+                  :disabled="!store.canClearImageAnnotations"
+                  :aria-label="t('Clear image annotations…')"
+                  :title="t('Clear image annotations…')"
+                  @click="clearAnnotationsOpen = true"
+                >
+                  <Icon name="trash" />{{ t("Clear labels…") }}
+                </button>
+                <button
+                  :disabled="!store.canClearAllPrompts"
+                  :aria-label="t('Clear all prompts')"
+                  :title="
+                    t(
+                      'Clear all points and box prompts on this image; keep masks, detection boxes and locked objects',
+                    )
+                  "
+                  @click="store.clearAllPrompts()"
+                >
+                  <Icon name="promptbox" />{{ t("Clear prompts") }}
+                </button>
+                <button
+                  :disabled="
+                    !store.annotation?.instances.some(
+                      (o) =>
+                        !o.locked && !o.box && (o.mask || o.polygons.length),
+                    ) || store.navigating
+                  "
+                  :aria-label="t('Create missing boxes from masks')"
+                  :title="t('Create missing boxes from masks')"
+                  @click="store.boxesFromMasks()"
+                >
+                  <Icon name="box" />{{ t("Masks to boxes") }}
+                </button>
+              </div>
+            </template>
+            <template #image>
+              <div v-if="store.annotation" class="section">
+                <h3>{{ t("Image review") }}</h3>
+                <div class="review">
+                  <button
+                    v-for="{ value, label } in reviewStates"
+                    :class="{
+                      active:
+                        value === 'excluded'
+                          ? store.annotation.excluded
+                          : store.annotation[
+                              store.task === 'detection'
+                                ? 'detection_review'
+                                : 'segmentation_review'
+                            ] === value,
+                    }"
+                    @click="review(value)"
+                  >
+                    {{ t(label) }}
+                  </button>
+                </div>
+                <label
+                  class="empty-confirmation"
                   :class="{
-                    active:
-                      value === 'excluded'
-                        ? store.annotation.excluded
-                        : store.annotation[
-                            store.task === 'detection'
-                              ? 'detection_review'
-                              : 'segmentation_review'
-                          ] === value,
+                    confirmed: store.annotation.explicit_empty[store.task],
                   }"
-                  @click="review(value)"
                 >
-                  {{ t(label) }}
-                </button>
-              </div>
-              <div class="tag-chips">
-                <span
-                  v-for="tag in store.annotation.tags"
-                  :style="{
-                    borderColor: store.meta?.tags.find((c) => c.name === tag)
-                      ?.color,
-                  }"
-                  >{{ tag }}</span
-                >
-              </div>
-              <input
-                :value="store.annotation.tags.join(', ')"
-                :placeholder="t('Image tags, comma separated')"
-                @change="tags(($event.target as HTMLInputElement).value)"
-              /><textarea
-                v-model="store.annotation.notes"
-                :placeholder="t('Image notes…')"
-                @change="store.changed()"
-              ></textarea
-              ><label
-                ><input
-                  type="checkbox"
-                  v-model="store.annotation.explicit_empty[store.task]"
+                  <input
+                    type="checkbox"
+                    ref="emptyConfirmation"
+                    :aria-label="t('Confirm no objects for this task')"
+                    aria-describedby="empty-confirmation-description"
+                    :checked="store.annotation.explicit_empty[store.task]"
+                    @change="
+                      store.setExplicitEmpty(
+                        ($event.target as HTMLInputElement).checked,
+                      )
+                    "
+                  />
+                  <span
+                    ><strong>{{
+                      t("Confirm no objects for this task")
+                    }}</strong>
+                    <small id="empty-confirmation-description">{{
+                      t(
+                        "Check the image before confirming; approval stays separate.",
+                      )
+                    }}</small></span
+                  >
+                </label>
+                <div class="tag-chips">
+                  <span
+                    v-for="tag in store.annotation.tags"
+                    :style="{
+                      borderColor: store.meta?.tags.find((c) => c.name === tag)
+                        ?.color,
+                    }"
+                    >{{ tag }}</span
+                  >
+                </div>
+                <input
+                  :value="store.annotation.tags.join(', ')"
+                  :placeholder="t('Image tags, comma separated')"
+                  @change="tags(($event.target as HTMLInputElement).value)"
+                /><textarea
+                  v-model="store.annotation.notes"
+                  :placeholder="t('Image notes…')"
                   @change="store.changed()"
-                />
-                {{ t("Confirm no objects for this task") }}</label
-              >
-            </div>
-            <div class="section">
-              <div class="row">
-                <h3>{{ t("Objects") }}</h3>
-                <span class="muted">{{
-                  store.annotation.instances.length
-                }}</span>
+                ></textarea>
               </div>
-              <button
-                v-for="object in store.annotation.instances"
-                :key="object.id"
-                class="object-row"
-                :class="{ active: object.id === store.selected }"
-                @click="store.selected = object.id"
-              >
-                <i
-                  :style="{
-                    background:
-                      store.meta?.classes.find((c) => c.id === object.class_id)
-                        ?.color ?? '#888',
-                  }"
-                ></i
-                ><span>{{
-                  store.meta?.classes.find((c) => c.id === object.class_id)
-                    ?.name ?? t("Unassigned")
-                }}</span
-                ><small
-                  >{{ object.box ? t("Box") : "" }}
-                  {{ object.polygons.length ? t("Mask") : "" }}</small
-                ></button
-              ><template v-if="store.object"
-                ><button
-                  :title="t('Search and assign a class · C')"
-                  :disabled="store.object.locked"
-                  @click="store.openClassPicker()"
-                >
-                  {{ t("Change class") }} <kbd>{{ t("C") }}</kbd>
-                </button>
-                <select
-                  :disabled="store.object.locked"
-                  :title="t('Assign a class to the selected annotation')"
-                  v-model="store.object.class_id"
-                  @change="store.changed(true)"
-                >
-                  <option :value="null">{{ t("Unassigned") }}</option>
-                  <option v-for="c in store.meta?.classes" :value="c.id">
-                    {{ c.name }}
-                  </option>
-                </select>
-                <p v-if="store.object.confidence != null" class="muted">
-                  {{ t("Original detection confidence:") }}
-                  {{ (store.object.confidence * 100).toFixed(1) }}%
-                </p>
-                <div v-if="store.object.box" class="coords">
-                  <label v-for="(_, i) in store.object.box"
-                    >{{ ["x1", "y1", "x2", "y2"][i]
-                    }}<input
-                      type="number"
-                      :disabled="store.object.locked || store.navigating"
-                      :value="store.object.box[i]"
-                      @change="editBoxCoordinate($event, i)"
-                  /></label>
-                </div>
-                <div class="row">
-                  <label
-                    ><input
-                      type="checkbox"
-                      v-model="store.object.locked"
-                      @change="store.changed()"
-                    />
-                    {{ t("Locked") }}</label
-                  ><label
-                    ><input
-                      type="checkbox"
-                      v-model="store.object.hidden"
-                      @change="store.changed()"
-                    />
-                    {{ t("Hidden") }}</label
-                  >
-                </div>
-                <div class="row">
-                  <button
-                    :title="t('Delete selected annotation · X or Delete')"
-                    @click="store.remove()"
-                  >
-                    {{ t("Delete object") }}</button
-                  ><button @click="store.segment()">
-                    {{ t("Refine mask") }}
-                  </button>
-                  <button
-                    :disabled="
-                      !store.canGenerateCandidates || !!store.candidates
-                    "
-                    :title="
-                      store.canGenerateCandidates
-                        ? t(
-                            'Preview alternative masks for the selected instance; batch processing always uses one mask',
-                          )
-                        : t(
-                            'Choose a supported SAM model and a visible, unlocked object with points or a box',
-                          )
-                    "
-                    data-candidate-trigger
-                    @click="store.generateCandidates()"
-                  >
-                    {{ t("Generate candidates") }}
-                  </button>
-                  <button
-                    v-if="store.object.mask || store.object.polygons.length"
-                    :disabled="store.object.locked"
-                    @click="store.boxesFromMasks(true, !!store.object.box)"
-                  >
-                    {{
-                      store.object.box
-                        ? t("Recalculate box from mask")
-                        : t("Create box from mask")
-                    }}
-                  </button>
-                </div></template
-              >
-              <button
-                v-if="
-                  store.annotation?.instances.some(
-                    (o) => o.mask || o.polygons.length,
-                  )
-                "
-                :title="
-                  t(
-                    'Create only missing boxes; preserve masks, classes and locked instances',
-                  )
-                "
-                @click="store.boxesFromMasks()"
-              >
-                {{ t("Create missing boxes from masks") }}
-              </button>
-              <p v-if="!store.object" class="muted">
-                {{ t("Select an object to inspect or edit it.") }}
-              </p>
-            </div></template
-          >
+            </template>
+          </WorkspaceInspector>
         </aside>
       </main>
       <footer>
@@ -948,6 +1054,36 @@ onBeforeUnmount(() => {
               : t("Saved")
         }}</span>
       </footer>
+      <NModal
+        :show="approvalWarning"
+        preset="card"
+        role="alertdialog"
+        :title="t('Cannot approve this image')"
+        style="width: 480px; max-width: 92vw; max-height: 85vh; overflow: auto"
+        @update:show="!$event && (store.error = '')"
+        @after-leave="approvalClosed"
+      >
+        <p>{{ uiError(store.error) }}</p>
+        <p class="muted">
+          {{
+            t(
+              "If the image has no objects for this task, confirm this explicitly in Image properties. Nothing is approved automatically.",
+            )
+          }}
+        </p>
+        <template #footer
+          ><div class="approval-actions">
+            <button @click="openApprovalProperties">
+              {{ t("Open image properties") }}
+            </button>
+            <button class="primary" @click="store.error = ''">
+              {{ t("Continue annotating") }}
+            </button>
+          </div></template
+        >
+      </NModal>
+      <ClearImageAnnotations v-model:show="clearAnnotationsOpen" />
+      <ExportSetup v-model:show="exportOpen" @started="batchStarted" />
       <NModal
         v-model:show="openDialog"
         preset="card"
@@ -989,98 +1125,123 @@ onBeforeUnmount(() => {
           logsOpen = true;
         "
       />
-      <NDrawer v-model:show="classesOpen" :width="390"
-        ><NDrawerContent :title="t('Project classes')" closable
-          ><p>
+      <NModal
+        v-model:show="classesOpen"
+        preset="card"
+        :title="t('Project classes')"
+        style="
+          width: 560px;
+          max-width: 92vw;
+          max-height: 85vh;
+          overflow: hidden;
+        "
+        content-style="overflow:auto;min-height:0"
+        ><p>
+          {{
+            t(
+              "Manage names and colors. Use the class palette to assign annotations.",
+            )
+          }}
+        </p>
+        <CategoryEditor
+          v-for="c in store.meta?.classes"
+          :key="c.id"
+          :category="c"
+          @saved="store.applyCategory"
+          @error="store.error = $event"
+        />
+        <button @click="createClass">{{ t("Add class") }}</button
+        ><button @click="reindex">
+          {{ t("Reindex IDs…") }}
+        </button></NModal
+      >
+      <NModal
+        v-model:show="tagsOpen"
+        preset="card"
+        :title="t('Project tags')"
+        style="
+          width: 560px;
+          max-width: 92vw;
+          max-height: 85vh;
+          overflow: hidden;
+        "
+        content-style="overflow:auto;min-height:0"
+      >
+        <section class="tag-group" aria-labelledby="builtin-states-heading">
+          <div class="row">
+            <h3 id="builtin-states-heading">
+              {{ t("Built-in review states") }}
+            </h3>
+            <span class="readonly-label">{{ t("Read only") }}</span>
+          </div>
+          <p class="muted">
             {{
               t(
-                "Manage names and colors. Use the class palette to assign annotations.",
+                "Review is tracked per task. Excluded applies to the whole image.",
               )
             }}
           </p>
+          <ul class="builtin-states">
+            <li v-for="state in reviewStates" :key="state.value">
+              <i :style="{ background: state.color }" aria-hidden="true"></i>
+              <div>
+                <strong>{{ t(state.label) }}</strong>
+                <p class="muted">{{ t(state.description) }}</p>
+              </div>
+            </li>
+          </ul>
+        </section>
+        <section class="tag-group" aria-labelledby="custom-tags-heading">
+          <h3 id="custom-tags-heading">{{ t("Custom image tags") }}</h3>
+          <p v-if="!store.meta?.tags.length" class="muted">
+            {{ t("No custom tags yet.") }}
+          </p>
           <CategoryEditor
-            v-for="c in store.meta?.classes"
+            v-for="c in store.meta?.tags"
             :key="c.id"
             :category="c"
             @saved="store.applyCategory"
             @error="store.error = $event"
           />
-          <button @click="createClass">{{ t("Add class") }}</button
-          ><button @click="reindex">
-            {{ t("Reindex IDs…") }}
-          </button></NDrawerContent
-        ></NDrawer
+          <p class="muted">
+            {{
+              t(
+                "New tags are registered when added to an image. Their names and colors are editable here.",
+              )
+            }}
+          </p>
+        </section></NModal
       >
-      <NDrawer v-model:show="tagsOpen" :width="390"
-        ><NDrawerContent :title="t('Project tags')" closable>
-          <section class="tag-group" aria-labelledby="builtin-states-heading">
-            <div class="row">
-              <h3 id="builtin-states-heading">
-                {{ t("Built-in review states") }}
-              </h3>
-              <span class="readonly-label">{{ t("Read only") }}</span>
-            </div>
-            <p class="muted">
-              {{
-                t(
-                  "Review is tracked per task. Excluded applies to the whole image.",
-                )
-              }}
-            </p>
-            <ul class="builtin-states">
-              <li v-for="state in reviewStates" :key="state.value">
-                <i :style="{ background: state.color }" aria-hidden="true"></i>
-                <div>
-                  <strong>{{ t(state.label) }}</strong>
-                  <p class="muted">{{ t(state.description) }}</p>
-                </div>
-              </li>
-            </ul>
-          </section>
-          <section class="tag-group" aria-labelledby="custom-tags-heading">
-            <h3 id="custom-tags-heading">{{ t("Custom image tags") }}</h3>
-            <p v-if="!store.meta?.tags.length" class="muted">
-              {{ t("No custom tags yet.") }}
-            </p>
-            <CategoryEditor
-              v-for="c in store.meta?.tags"
-              :key="c.id"
-              :category="c"
-              @saved="store.applyCategory"
-              @error="store.error = $event"
-            />
-            <p class="muted">
-              {{
-                t(
-                  "New tags are registered when added to an image. Their names and colors are editable here.",
-                )
-              }}
-            </p>
-          </section></NDrawerContent
-        ></NDrawer
-      >
-      <NDrawer v-model:show="help" :width="420"
-        ><NDrawerContent :title="t('Keyboard shortcuts')" closable
-          ><input
-            v-model="keySearch"
-            :placeholder="t('Search actions or keys…')"
-          />
-          <div
-            v-for="[action, key] in shortcuts.filter((row) =>
-              [t(row[0]), t(row[1]), ...row]
-                .join(' ')
-                .toLowerCase()
-                .includes(keySearch.toLowerCase()),
-            )"
-            class="shortcut"
-          >
-            <span>{{ t(action) }}</span
-            ><kbd>{{ t(key) }}</kbd>
-          </div>
-          <p>
-            {{ t("Single-key shortcuts are disabled while typing.") }}
-          </p></NDrawerContent
-        ></NDrawer
+      <NModal
+        v-model:show="help"
+        preset="card"
+        :title="t('Keyboard shortcuts')"
+        style="
+          width: 720px;
+          max-width: 92vw;
+          max-height: 85vh;
+          overflow: hidden;
+        "
+        content-style="overflow:auto;min-height:0"
+        ><input
+          v-model="keySearch"
+          :placeholder="t('Search actions or keys…')"
+        />
+        <div
+          v-for="[action, key] in shortcuts.filter((row) =>
+            [t(row[0]), t(row[1]), ...row]
+              .join(' ')
+              .toLowerCase()
+              .includes(keySearch.toLowerCase()),
+          )"
+          class="shortcut"
+        >
+          <span>{{ t(action) }}</span
+          ><kbd>{{ t(key) }}</kbd>
+        </div>
+        <p>
+          {{ t("Single-key shortcuts are disabled while typing.") }}
+        </p></NModal
       >
       <ClassPicker />
       <FastTooltip /></div

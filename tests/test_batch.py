@@ -229,6 +229,7 @@ def test_dispatch_rechecks_review_and_rejects_replaced_checkpoint(tmp_path):
     try:
         ann = project.annotation(ids[0])
         ann.segmentation_review = "ok"
+        ann.explicit_empty["segmentation"] = True
         project.save(ids[0], ann)
         registry.weights("test").write_bytes(b"replacement checkpoint")
         results = []

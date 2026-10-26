@@ -323,3 +323,37 @@ def test_resume_rejects_changed_project_class_snapshot(tmp_path):
     with pytest.raises(ValueError, match="Project class definitions changed"):
         run_batch(project, registry, body, report, EventLog(), lambda: None)
     assert not project.annotation(next(iter(project.entries))).instances
+
+
+@pytest.mark.parametrize(
+    "options,expected",
+    [
+        ({"box_padding_pixels": 3}, [7, 2, 23, 18]),
+        ({"box_padding_mode": "ratio", "box_padding_ratio": 0.2}, [8, 3, 22, 17]),
+        (
+            {"box_padding_pixels": 3, "box_padding_ratio": 0.2, "box_padding_min": True},
+            [8, 3, 22, 17],
+        ),
+        ({"box_padding_pixels": 100}, [0, 0, 30, 20]),
+        ({"box_padding_pixels": 3, "box_padding_min": True}, [10, 5, 20, 15]),
+    ],
+)
+def test_mask_box_padding(tmp_path, options, expected):
+    project, _ = fixture(tmp_path)
+    ann = project.annotation(next(iter(project.entries)))
+    mask = np.zeros((20, 30), dtype=np.uint8)
+    mask[5:15, 10:20] = 1
+    obj = Instance(mask=encode_mask(mask))
+    ann.instances = [obj]
+    result = compute_annotation(
+        None, (30, 20), ann, SegmentRequest(operation="boxes_from_masks", **options), None
+    )
+    assert result.instances[0].box == expected
+    assert obj.mask == encode_mask(mask)
+
+
+@pytest.mark.parametrize("value", [-1, float("inf"), float("nan")])
+@pytest.mark.parametrize("field", ["box_padding_pixels", "box_padding_ratio"])
+def test_mask_box_padding_rejects_invalid_numbers(field, value):
+    with pytest.raises(ValueError):
+        SegmentRequest(**{field: value})

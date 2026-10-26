@@ -29,6 +29,10 @@ class SegmentRequest(BaseModel):
     allow_new_classes: bool = False
     write_policy: Literal["fill_empty", "append"] = "fill_empty"
     recalculate_boxes: bool = False
+    box_padding_mode: Literal["pixels", "ratio"] = "pixels"
+    box_padding_pixels: float = Field(default=0, ge=0, allow_inf_nan=False)
+    box_padding_ratio: float = Field(default=0, ge=0, allow_inf_nan=False)
+    box_padding_min: bool = False
     review_states: list[Literal["pending", "uncertain", "ok"]] = Field(
         default_factory=lambda: ["pending"], min_length=1
     )

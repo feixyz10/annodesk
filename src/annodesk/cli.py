@@ -216,6 +216,10 @@ def detect(
 def boxes_from_masks(
     project: Path,
     recalculate_boxes: bool = False,
+    box_padding_mode: Literal["pixels", "ratio"] = "pixels",
+    box_padding_pixels: float = 0,
+    box_padding_ratio: float = 0,
+    box_padding_min: bool = False,
     review_states: tuple[Literal["pending", "uncertain", "ok"], ...] = ("pending",),
     log_dir: Path | None = None,
     log_level: str = "INFO",
@@ -225,6 +229,10 @@ def boxes_from_masks(
     Args:
         project: Dataset directory to process on this machine. Close any AnnoDesk service writing this project before running the command.
         recalculate_boxes: Replace existing unlocked boxes using mask bounds. Disabled: create only missing boxes. Masks/classes are preserved; locked instances are always skipped.
+        box_padding_mode: Per-side padding mode: pixels or ratio of the mask bounding box width/height. Defaults to pixels with zero padding.
+        box_padding_pixels: Nonnegative pixels added to each side.
+        box_padding_ratio: Nonnegative fraction of mask bounds added on each side; 0.1 means 10 percent per side.
+        box_padding_min: Take the smaller pixel and ratio padding independently on each axis, overriding the selected mode. All boxes are clipped to image bounds.
         review_states: Detection review states to include, space-separated: pending (Not reviewed), uncertain (Needs review), ok (Approved). Excluded images are always skipped.
         log_dir: Directory for session log files. Omit/None: use ~/.cache/annodesk. Relative paths use the current working directory.
         log_level: Minimum file/terminal log level: TRACE, DEBUG, INFO, SUCCESS, WARNING, ERROR or CRITICAL.
@@ -235,6 +243,10 @@ def boxes_from_masks(
             operation="boxes_from_masks",
             device_type="cpu",
             recalculate_boxes=recalculate_boxes,
+            box_padding_mode=box_padding_mode,
+            box_padding_pixels=box_padding_pixels,
+            box_padding_ratio=box_padding_ratio,
+            box_padding_min=box_padding_min,
             review_states=list(review_states),
         ),
         None,

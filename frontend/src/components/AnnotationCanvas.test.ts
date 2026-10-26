@@ -53,7 +53,10 @@ vi.mock("konva", () => {
     }
     scale() {}
     scaleX() {
-      return 1;
+      return this.attrs.scaleX ?? 1;
+    }
+    scaleY() {
+      return this.attrs.scaleY ?? 1;
     }
     position() {}
   }
@@ -119,6 +122,18 @@ async function mountedCanvas() {
   graph.stages = [];
   ImageRequest.requests = [];
   vi.stubGlobal("Image", ImageRequest);
+  vi.stubGlobal("document", {
+    createElement: () => ({
+      getContext: () => ({
+        drawImage: vi.fn(),
+        createImageData: (w: number, h: number) => ({
+          data: new Uint8ClampedArray(w * h * 4),
+        }),
+        putImageData: vi.fn(),
+        getImageData: () => ({ data: new Uint8ClampedArray(400) }),
+      }),
+    }),
+  });
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -180,6 +195,18 @@ function rendered(image: ImageRequest) {
 }
 
 describe("mask overlay lifecycle", () => {
+  it("preserves loaded images and viewport when project metadata refreshes", async () => {
+    const store = await mountedCanvas();
+    const count = ImageRequest.requests.length;
+    const stage = graph.stages.at(-1)!;
+    const scale = vi.spyOn(stage, "scale");
+    const position = vi.spyOn(stage, "position");
+    store.meta = { ...store.meta!, image_count: 3 };
+    await flush();
+    expect(ImageRequest.requests).toHaveLength(count);
+    expect(scale).not.toHaveBeenCalled();
+    expect(position).not.toHaveBeenCalled();
+  });
   it("evicts completed overlays from earlier revisions", async () => {
     const store = await mountedCanvas();
     const first = masks().at(-1)!;
@@ -231,6 +258,7 @@ describe("temporary Space panning", () => {
     store.annotation!.instances[0].box = [1, 2, 8, 9];
     store.tool = "select";
     store.selected = "object";
+    store.selectedGeometry = "box";
     await flush();
     const checkpoint = vi.spyOn(store, "checkpoint");
     const editBox = vi.spyOn(store, "editBox");
@@ -389,4 +417,240 @@ describe("canvas gesture ownership", () => {
       expect(fetch).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("editable segmentation prompts", () => {
+  it("adds consecutive points to one object and schedules automatic refinement", async () => {
+    const store = await mountedCanvas();
+    store.selected = "object";
+    store.tool = "positive";
+    const update = vi.spyOn(store, "promptsChanged");
+    const stage = graph.stages.at(-1);
+    stage.attrs.pointer = { x: 2, y: 3 };
+    stage.handlers.mousedown({ target: stage });
+    store.tool = "negative";
+    stage.attrs.pointer = { x: 7, y: 8 };
+    stage.handlers.mousedown({ target: stage });
+    expect(store.annotation!.instances).toHaveLength(1);
+    expect(store.object!.points).toEqual([
+      { x: 2, y: 3, positive: true },
+      { x: 7, y: 8, positive: false },
+    ]);
+    expect(update).toHaveBeenCalledTimes(2);
+  });
+  it("selects a point or a prompt box and removes only that prompt", async () => {
+    const store = await mountedCanvas();
+    const obj = store.annotation!.instances[0];
+    obj.box = null;
+    obj.prompt_box = [1, 1, 9, 9];
+    obj.points = [{ x: 2, y: 3, positive: true }];
+    store.tool = "select";
+    store.selectionTarget = "prompts";
+    await flush();
+    const point = graph.layers
+      .at(-1)
+      .children.find((shape: any) => shape.attrs.radius !== undefined);
+    const event = { cancelBubble: false };
+    point.handlers.mousedown(event);
+    expect(event.cancelBubble).toBe(true);
+    expect(store.selectedPrompt).toBe(0);
+    store.deleteSelected();
+    expect(obj.points).toHaveLength(0);
+    expect(obj.mask).toBeTruthy();
+    await flush();
+    const box = graph.layers
+      .at(-1)
+      .children.find((shape: any) => shape.attrs.dash?.length);
+    box.handlers.mousedown({ cancelBubble: false });
+    expect(store.selectedPrompt).toBe("box");
+    store.deleteSelected();
+    expect(obj.prompt_box).toBeNull();
+    expect(store.annotation!.instances).toHaveLength(1);
+    expect(obj.mask).toBeTruthy();
+  });
+});
+
+describe("lossless mask selection", () => {
+  it("selects filled pixels of RLE-only masks, but not their holes or background", async () => {
+    const store = await mountedCanvas();
+    const rgba = new Uint8ClampedArray(400);
+    rgba[(3 * 10 + 2) * 4 + 3] = 110;
+    rgba[(8 * 10 + 7) * 4 + 3] = 110; // A disconnected component.
+    vi.stubGlobal("document", {
+      createElement: () => ({
+        getContext: () => ({
+          drawImage: vi.fn(),
+          createImageData: (w: number, h: number) => ({
+            data: new Uint8ClampedArray(w * h * 4),
+          }),
+          putImageData: vi.fn(),
+          getImageData: () => ({ data: rgba }),
+        }),
+      }),
+    });
+    masks().at(-1)!.onload!();
+    await flush();
+    store.tool = "select";
+    const stage = graph.stages.at(-1);
+    for (const [x, y] of [
+      [2, 3],
+      [7, 8],
+    ]) {
+      stage.attrs.pointer = { x, y };
+      stage.handlers.mousedown({ target: stage });
+      expect(store.selected).toBe("object");
+      expect(store.selectedGeometry).toBe("mask");
+    }
+    stage.attrs.pointer = { x: 4, y: 4 };
+    stage.handlers.mousedown({ target: stage });
+    expect(store.selected).toBeNull();
+    expect(store.selectedGeometry).toBeNull();
+  });
+});
+
+it("a foreground click after New object creates a separate mask instance", async () => {
+  const store = await mountedCanvas();
+  store.selected = "object";
+  store.tool = "positive";
+  const obj = store.object!;
+  obj.points = [{ x: 2, y: 3, positive: true }];
+  const before = JSON.stringify(obj);
+  store.newObject();
+  vi.spyOn(store, "promptsChanged").mockImplementation(() => {});
+  const stage = graph.stages.at(-1);
+  stage.attrs.pointer = { x: 7, y: 8 };
+  stage.handlers.mousedown({ target: stage });
+  expect(store.annotation!.instances).toHaveLength(2);
+  expect(JSON.stringify(store.annotation!.instances[0])).toBe(before);
+  expect(store.object!.id).not.toBe(obj.id);
+  expect(store.object!.points).toEqual([{ x: 7, y: 8, positive: true }]);
+});
+
+it("waits for restored local masks to be saved before requesting their server overlays", async () => {
+  const store = await mountedCanvas();
+  const before = masks().length;
+  store.dirty = true;
+  masks().at(-1)!.onerror!();
+  expect(store.error).toBe("");
+  store.annotation!.revision = 10;
+  await flush();
+  expect(masks()).toHaveLength(before);
+  store.dirty = false;
+  await flush();
+  expect(masks()).toHaveLength(before + 1);
+});
+
+it("keeps coincident detection boxes, prompt boxes and masks independently selectable", async () => {
+  const store = await mountedCanvas();
+  const obj = store.annotation!.instances[0];
+  obj.box = [1, 1, 8, 8];
+  obj.prompt_box = [1, 1, 8, 8];
+  const rgba = new Uint8ClampedArray(400);
+  rgba[(4 * 10 + 4) * 4 + 3] = 110;
+  vi.stubGlobal("document", {
+    createElement: () => ({
+      getContext: () => ({
+        drawImage: vi.fn(),
+        getImageData: () => ({ data: rgba }),
+        createImageData: (w: number, h: number) => ({
+          data: new Uint8ClampedArray(w * h * 4),
+        }),
+        putImageData: vi.fn(),
+      }),
+    }),
+  });
+  masks().at(-1)!.onload!();
+  store.tool = "select";
+  await flush();
+  const nodes = () => graph.layers.at(-1).children;
+  const box = (prompt: boolean) =>
+    nodes().find(
+      (shape: any) => shape.attrs.dash && !!shape.attrs.dash.length === prompt,
+    );
+  expect(box(false).attrs.listening).toBe(true);
+  expect(box(true).attrs.listening).toBe(false);
+  expect(box(false).attrs.fillEnabled).toBe(false);
+  expect(box(true).attrs.fillEnabled).toBe(false);
+  expect(box(false).attrs.stroke).not.toBe(box(true).attrs.stroke);
+  box(true).handlers.mousedown({ cancelBubble: false });
+  expect(store.selectedPrompt).toBeNull();
+  const stage = graph.stages.at(-1);
+  stage.attrs.pointer = { x: 4, y: 4 };
+  stage.handlers.mousedown({ target: stage });
+  expect(store.selectedGeometry).toBe("mask");
+  await flush();
+  expect(nodes().some((shape: any) => shape.attrs.nodes)).toBe(false);
+  store.selectGeometry(obj.id, "box");
+  await flush();
+  expect(nodes().find((shape: any) => shape.attrs.nodes).attrs.nodes[0]).toBe(
+    box(false),
+  );
+  store.selectPrompt(obj.id, "box");
+  await flush();
+  expect(store.selectionTarget).toBe("prompts");
+  expect(box(false).attrs.listening).toBe(false);
+  expect(box(true).attrs.listening).toBe(true);
+  expect(nodes().find((shape: any) => shape.attrs.nodes).attrs.nodes[0]).toBe(
+    box(true),
+  );
+  box(false).handlers.mousedown({ cancelBubble: false });
+  expect(store.selectedPrompt).toBe("box");
+  store.selectGeometry(obj.id, "mask");
+  await flush();
+  expect(store.selectionTarget).toBe("results");
+  expect(store.selectedPrompt).toBeNull();
+  expect(store.selectedGeometry).toBe("mask");
+});
+
+it.each(["box", "prompt"])(
+  "resizes a selected %s from its handles without reinterpreting the click as mask selection",
+  async (kind) => {
+    const store = await mountedCanvas();
+    const obj = store.annotation!.instances[0];
+    if (kind === "box") {
+      obj.box = [1, 1, 8, 8];
+      store.selectGeometry(obj.id, "box");
+    } else {
+      obj.prompt_box = [1, 1, 8, 8];
+      store.selectPrompt(obj.id, "box");
+    }
+    vi.spyOn(store, "promptsChanged").mockImplementation(() => {});
+    await flush();
+    const nodes = graph.layers.at(-1).children;
+    const transformer = nodes.find((n: any) => n.attrs.nodes);
+    expect(transformer.attrs.keepRatio).toBe(false);
+    const shape = transformer.attrs.nodes[0];
+    const anchor = { getParent: () => transformer };
+    const stage = graph.stages.at(-1);
+    stage.attrs.pointer = { x: 8, y: 8 };
+    stage.handlers.mousedown({ target: anchor });
+    expect(store.selected).toBe(obj.id);
+    expect(kind === "box" ? store.selectedGeometry : store.selectedPrompt).toBe(
+      "box",
+    );
+    shape.handlers.transformstart();
+    shape.attrs.scaleX = 2;
+    shape.handlers.transformend();
+    expect(kind === "box" ? obj.box : obj.prompt_box).toEqual([1, 1, 10, 8]);
+    expect(obj.mask).toBeTruthy();
+    store.undo();
+    expect(
+      kind === "box"
+        ? store.annotation!.instances[0].box
+        : store.annotation!.instances[0].prompt_box,
+    ).toEqual([1, 1, 8, 8]);
+  },
+);
+
+it("does not restore an unfinished box after all image annotations are cleared", async () => {
+  const store = await mountedCanvas();
+  store.tool = "box";
+  await flush();
+  const stage = graph.stages.at(-1);
+  stage.attrs.pointer = { x: 1, y: 1 };
+  stage.handlers.mousedown({ target: stage });
+  store.clearImageAnnotations(true);
+  stage.attrs.pointer = { x: 7, y: 7 };
+  stage.handlers.mouseup();
+  expect(store.annotation!.instances).toHaveLength(0);
 });

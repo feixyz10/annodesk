@@ -1,11 +1,25 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, watch } from "vue";
+import { onMounted, onBeforeUnmount, ref, watch, computed } from "vue";
 import Konva from "konva";
+import { toolCursors } from "../toolCursors";
+import { maskOutline } from "../maskOutline";
 import { useProject } from "../stores/project";
 import { projectResource, instance, type Annotation } from "../api";
 const store = useProject(),
   host = ref<HTMLDivElement>(),
   ratio = ref(1);
+const spaceHeld = ref(false),
+  panning = ref(false);
+const cursor = computed(() => {
+  if (store.navigating) return "wait";
+  if (spaceHeld.value || store.tool === "pan")
+    return panning.value ? "grabbing" : "grab";
+  if (store.tool === "select")
+    return store.selectionTarget === "prompts"
+      ? toolCursors.prompts
+      : "default";
+  return toolCursors[store.tool] ?? "default";
+});
 let stage: Konva.Stage,
   layer: Konva.Layer,
   background: HTMLImageElement | null = null,
@@ -20,6 +34,14 @@ let drawingContext: {
   annotation: Annotation;
   tool: string;
 } | null = null;
+function isTransformHandle(target: Konva.Node) {
+  let node: Konva.Node | null = target;
+  while (node && node !== stage) {
+    if (node === transformer) return true;
+    node = node.getParent?.() ?? null;
+  }
+  return false;
+}
 function cancelDrawing() {
   start = null;
   drawingContext = null;
@@ -42,6 +64,111 @@ function validContext(generation: number, annotation: Annotation) {
 }
 const maskCache = new Map<string, HTMLImageElement>(),
   loadingMasks = new Set<string>();
+const maskHitCache = new Map<
+  string,
+  { width: number; height: number; alpha: Uint8Array }
+>();
+let outlineCache: { key: string; image: HTMLCanvasElement } | null = null;
+function drawSelectionOutline() {
+  const obj = store.object,
+    ann = store.annotation;
+  if (store.candidate && store.candidates?.response?.instance_id === obj?.id) {
+    outlineCache = null;
+    return;
+  }
+  if (
+    !obj?.mask ||
+    !ann ||
+    obj.hidden ||
+    store.selectedGeometry === "box" ||
+    store.selectedPrompt !== null
+  ) {
+    outlineCache = null;
+    return;
+  }
+  const color =
+    store.meta?.classes.find((c) => c.id === obj.class_id)?.color ?? "#657286";
+  const key = overlayKey(obj.id, ann.revision, color);
+  const pixels = maskHitCache.get(key);
+  if (!pixels) return;
+  const scale = stage.scaleX();
+  const cacheKey = JSON.stringify([
+    key,
+    Math.max(1, Math.min(8, Math.ceil(2 / Math.max(scale, 0.01)))),
+  ]);
+  if (outlineCache?.key !== cacheKey) {
+    const image = document.createElement("canvas");
+    image.width = pixels.width;
+    image.height = pixels.height;
+    const ctx = image.getContext("2d");
+    if (!ctx) return;
+    const data = ctx.createImageData(pixels.width, pixels.height);
+    data.data.set(
+      maskOutline(pixels.alpha, pixels.width, pixels.height, scale),
+    );
+    ctx.putImageData(data, 0, 0);
+    outlineCache = { key: cacheKey, image };
+  }
+  layer.add(
+    new Konva.Image({
+      image: outlineCache.image,
+      width: ann.width,
+      height: ann.height,
+      listening: false,
+    }),
+  );
+}
+function overlayKey(id: string, revision: number, color: string) {
+  return JSON.stringify([
+    store.meta?.session ?? store.meta?.id,
+    store.current?.id,
+    id,
+    revision,
+    color,
+  ]);
+}
+function insidePolygon(p: { x: number; y: number }, points: number[][]) {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const [x, y] = points[i],
+      [px, py] = points[j];
+    if (y > p.y !== py > p.y && p.x < ((px - x) * (p.y - y)) / (py - y) + x)
+      inside = !inside;
+  }
+  return inside;
+}
+function selectMaskAt(p: { x: number; y: number }) {
+  const ann = store.annotation;
+  if (!ann) return;
+  for (const obj of [...ann.instances].reverse()) {
+    if (obj.hidden) continue;
+    let hit = false;
+    if (obj.mask) {
+      const color =
+        store.meta?.classes.find((c) => c.id === obj.class_id)?.color ??
+        "#657286";
+      const pixels = maskHitCache.get(overlayKey(obj.id, ann.revision, color));
+      const x = Math.floor(p.x),
+        y = Math.floor(p.y);
+      hit = !!(
+        pixels &&
+        x >= 0 &&
+        y >= 0 &&
+        x < pixels.width &&
+        y < pixels.height &&
+        pixels.alpha[y * pixels.width + x]
+      );
+    } else hit = obj.polygons.some((poly) => insidePolygon(p, poly));
+    if (hit) {
+      selectObject(obj.id);
+      store.selectedGeometry = "mask";
+      return;
+    }
+  }
+  store.selected = null;
+  store.selectedPrompt = null;
+  store.selectedGeometry = null;
+}
 let fitted = true;
 let imageGeneration = 0;
 let candidateImage: HTMLImageElement | null = null;
@@ -53,6 +180,7 @@ function selectObject(id: string) {
   const twice = lastSelection.id === id && now - lastSelection.time < 350;
   lastSelection = { id, time: twice ? 0 : now };
   store.selected = id;
+  store.selectedPrompt = null;
   if (twice) store.openClassPicker();
 }
 function fit() {
@@ -97,6 +225,8 @@ function draw() {
   layer.destroyChildren();
   if (!store.annotation) {
     maskCache.clear();
+    maskHitCache.clear();
+    outlineCache = null;
     return;
   }
   const a = store.annotation,
@@ -116,7 +246,10 @@ function draw() {
       ),
   );
   for (const key of maskCache.keys()) {
-    if (!liveKeys.has(key)) maskCache.delete(key);
+    if (!liveKeys.has(key)) {
+      maskCache.delete(key);
+      maskHitCache.delete(key);
+    }
   }
   if (background)
     layer.add(
@@ -160,7 +293,7 @@ function draw() {
             listening: false,
           }),
         );
-      else if (!loadingMasks.has(key)) {
+      else if (!store.dirty && !loadingMasks.has(key)) {
         loadingMasks.add(key);
         const im = new Image();
         im.crossOrigin = "anonymous";
@@ -175,6 +308,29 @@ function draw() {
             (store.meta?.session ?? store.meta?.id) === projectId &&
             store.annotation?.revision === revision
           ) {
+            const canvas = document.createElement("canvas");
+            canvas.width = a.width;
+            canvas.height = a.height;
+            const context = canvas.getContext("2d", {
+              willReadFrequently: true,
+            });
+            if (context) {
+              try {
+                context.drawImage(im, 0, 0, a.width, a.height);
+                const rgba = context.getImageData(0, 0, a.width, a.height).data;
+                const alpha = new Uint8Array(a.width * a.height);
+                for (let i = 0; i < alpha.length; i++)
+                  alpha[i] = rgba[i * 4 + 3];
+                maskHitCache.set(key, {
+                  width: a.width,
+                  height: a.height,
+                  alpha,
+                });
+              } catch {
+                store.error =
+                  "Could not prepare mask selection; reload the image.";
+              }
+            }
             maskCache.set(key, im);
             draw();
           }
@@ -185,7 +341,8 @@ function draw() {
           if (
             store.current?.id === imageId &&
             (store.meta?.session ?? store.meta?.id) === projectId &&
-            store.annotation?.revision === revision
+            store.annotation?.revision === revision &&
+            !store.dirty
           )
             store.error = "Could not load lossless mask overlay";
         };
@@ -199,40 +356,67 @@ function draw() {
         closed: true,
         fill: object.mask || previewing ? "rgba(0,0,0,0.001)" : color + "55",
         stroke: color,
-        strokeWidth: 1.5,
+        strokeWidth:
+          store.selected === object.id && store.selectedGeometry === "mask"
+            ? 2.5
+            : 1.5,
         strokeScaleEnabled: false,
+        listening: false,
       });
-      shape.on("click tap", () => {
-        if (validContext(generation, a)) selectObject(object.id);
-      });
+      // Stage selection tests lossless alpha, including holes and disconnected regions.
+
       layer.add(shape);
     }
-    const box = object.box ?? object.prompt_box;
-    if (box) {
+    for (const kind of ["box", "prompt_box"] as const) {
+      const box = object[kind];
+      if (!box) continue;
+      const isPrompt = kind === "prompt_box";
+      const selectable =
+        store.selectionTarget === (isPrompt ? "prompts" : "results");
+      const focused =
+        store.selected === object.id &&
+        (isPrompt
+          ? store.selectedPrompt === "box"
+          : store.selectedGeometry === "box");
       const shape = new Konva.Rect({
         x: box[0],
         y: box[1],
         width: box[2] - box[0],
         height: box[3] - box[1],
-        stroke: color,
-        strokeWidth: store.selected === object.id ? 2.5 : 1.5,
+        // Konva's hit canvas fills paths unless fillEnabled is explicitly disabled.
+        fillEnabled: false,
+        hitStrokeWidth: 8,
+        stroke: isPrompt ? "#a86a0a" : color,
+        strokeWidth: focused ? 2.5 : 1.5,
         strokeScaleEnabled: false,
-        dash: object.box ? [] : [5, 3],
-        draggable: !space && store.tool === "select" && !object.locked,
+        dash: isPrompt ? [7, 4] : [],
+        listening: !space && store.tool === "select" && selectable,
+        draggable:
+          !space && store.tool === "select" && selectable && !object.locked,
       });
       shape.on("mousedown touchstart", (e) => {
-        if (validContext(generation, a) && store.tool === "select") {
+        if (
+          validContext(generation, a) &&
+          store.tool === "select" &&
+          selectable
+        ) {
           e.cancelBubble = true;
-          selectObject(object.id);
+          if (isPrompt) store.selectPrompt(object.id, "box");
+          else {
+            selectObject(object.id);
+            store.selectedGeometry = "box";
+          }
         }
       });
       shape.on("dragstart", () => {
-        if (validContext(generation, a) && !object.locked) store.checkpoint();
+        if (validContext(generation, a) && selectable && !object.locked)
+          store.checkpoint();
       });
       shape.on("dragend", () => {
         if (
           !validContext(generation, a) ||
           store.tool !== "select" ||
+          !selectable ||
           object.locked
         )
           return;
@@ -240,16 +424,18 @@ function draw() {
           h = shape.height(),
           x = Math.max(0, Math.min(a.width - w, shape.x())),
           y = Math.max(0, Math.min(a.height - h, shape.y()));
-        store.editBox(object.id, [x, y, x + w, y + h], !object.box, false);
+        store.editBox(object.id, [x, y, x + w, y + h], isPrompt, false);
         draw();
       });
       shape.on("transformstart", () => {
-        if (validContext(generation, a) && !object.locked) store.checkpoint();
+        if (validContext(generation, a) && selectable && !object.locked)
+          store.checkpoint();
       });
       shape.on("transformend", () => {
         if (
           !validContext(generation, a) ||
           store.tool !== "select" ||
+          !selectable ||
           object.locked
         )
           return;
@@ -263,40 +449,60 @@ function draw() {
             1,
             Math.min(a.height - y, shape.height() * shape.scaleY()),
           );
-        store.editBox(object.id, [x, y, x + w, y + h], !object.box, false);
+        store.editBox(object.id, [x, y, x + w, y + h], isPrompt, false);
         draw();
       });
       layer.add(shape);
       if (
         !space &&
-        store.selected === object.id &&
+        selectable &&
+        focused &&
         !object.locked &&
         store.tool === "select"
       ) {
         transformer = new Konva.Transformer({
           nodes: [shape],
           rotateEnabled: false,
+          keepRatio: false,
           flipEnabled: false,
           ignoreStroke: true,
           anchorSize: 7,
+          anchorStroke: isPrompt ? "#a86a0a" : "#315fe9",
+          anchorFill: "#fff",
           borderEnabled: false,
         });
         layer.add(transformer);
       }
     }
-    for (const p of object.points)
-      layer.add(
-        new Konva.Circle({
-          x: p.x,
-          y: p.y,
-          radius: 4 / stage.scaleX(),
-          fill: p.positive ? "#24835d" : "#c14d5c",
-          stroke: "white",
-          strokeWidth: 1.5 / stage.scaleX(),
-          listening: false,
-        }),
-      );
+    object.points.forEach((p, index) => {
+      const selected =
+        store.selected === object.id && store.selectedPrompt === index;
+      const point = new Konva.Circle({
+        x: p.x,
+        y: p.y,
+        radius: (selected ? 6 : 4) / stage.scaleX(),
+        fill: p.positive ? "#24835d" : "#c14d5c",
+        stroke: selected ? "#172d4d" : "white",
+        strokeWidth: (selected ? 2 : 1) / stage.scaleX(),
+        listening:
+          !space &&
+          store.tool === "select" &&
+          store.selectionTarget === "prompts",
+      });
+      point.on("mousedown touchstart", (e) => {
+        if (
+          validContext(generation, a) &&
+          store.tool === "select" &&
+          store.selectionTarget === "prompts"
+        ) {
+          e.cancelBubble = true;
+          store.selectPrompt(object.id, index);
+        }
+      });
+      layer.add(point);
+    });
   }
+  drawSelectionOutline();
   layer.batchDraw();
 }
 function key(e: KeyboardEvent) {
@@ -306,7 +512,7 @@ function key(e: KeyboardEvent) {
     e.metaKey ||
     e.altKey ||
     (e.target as HTMLElement).closest(
-      "input,textarea,select,button,[role=dialog],[contenteditable=true],.mask-candidates",
+      "input,textarea,select,button,.n-modal,[role=dialog],[contenteditable=true],.mask-candidates,.statistics-drawer",
     )
   )
     return;
@@ -315,6 +521,7 @@ function key(e: KeyboardEvent) {
     if (!space) {
       invalidateGestures();
       space = true;
+      spaceHeld.value = true;
       stage?.draggable(true);
       draw();
     }
@@ -323,9 +530,19 @@ function key(e: KeyboardEvent) {
 function release(e: KeyboardEvent) {
   if (e.code === "Space") {
     space = false;
+    spaceHeld.value = false;
+    panning.value = false;
     stage?.draggable(store.tool === "pan");
     draw();
   }
+}
+function blur() {
+  space = false;
+  spaceHeld.value = false;
+  panning.value = false;
+  invalidateGestures();
+  stage?.draggable(store.tool === "pan");
+  draw();
 }
 onMounted(() => {
   stage = new Konva.Stage({
@@ -350,15 +567,24 @@ onMounted(() => {
       draw();
     }
   });
+  stage.on("dragstart", (event) => {
+    if (event.target === stage) panning.value = true;
+  });
   stage.on("dragend", (event) => {
-    if (event.target === stage) fitted = false;
+    if (event.target === stage) {
+      fitted = false;
+      panning.value = false;
+    }
   });
   observer.observe(host.value!);
+  window.addEventListener("blur", blur);
   stage.on("wheel", (e) => {
     e.evt.preventDefault();
     zoom(Math.exp(-e.evt.deltaY * 0.002), stage.getPointerPosition()!);
   });
   stage.on("mousedown touchstart", (e) => {
+    // Transformer anchors own resizing. Never reinterpret them as mask/background selection.
+    if (isTransformHandle(e.target)) return;
     if (!store.annotation || store.navigating || space || store.tool === "pan")
       return;
     const p = coordinates(),
@@ -377,7 +603,8 @@ onMounted(() => {
         y: p.y,
         width: 1,
         height: 1,
-        stroke: "#315fe9",
+        stroke: store.tool === "promptbox" ? "#a86a0a" : "#315fe9",
+        dash: store.tool === "promptbox" ? [7, 4] : [],
         strokeWidth: 1.5,
         strokeScaleEnabled: false,
       });
@@ -393,8 +620,15 @@ onMounted(() => {
       }
       obj.points.push({ x: p.x, y: p.y, positive: store.tool === "positive" });
       store.changed("segmentation");
-    } else if (e.target === stage || e.target instanceof Konva.Image)
-      store.selected = null;
+      store.promptsChanged();
+    } else if (store.tool === "select") {
+      if (store.selectionTarget === "results") selectMaskAt(p);
+      else {
+        store.selected = null;
+        store.selectedPrompt = null;
+        store.selectedGeometry = null;
+      }
+    }
   });
   stage.on("mousemove touchmove", () => {
     if (!start || !temporary || !drawingContext) return;
@@ -432,6 +666,7 @@ onMounted(() => {
     a.instances.push(obj);
     store.selected = obj.id;
     store.changed(tool === "box" ? "detection" : "segmentation");
+    if (tool === "promptbox") store.promptsChanged();
   });
   window.addEventListener("keydown", key);
   window.addEventListener("keyup", release);
@@ -441,6 +676,8 @@ async function loadImage() {
   const generation = ++imageGeneration;
   background = null;
   maskCache.clear();
+  maskHitCache.clear();
+  outlineCache = null;
   loadingMasks.clear();
   const id = store.current?.id;
   if (!id) return;
@@ -463,6 +700,7 @@ watch(
     () => store.meta?.root,
     () => store.current?.id,
     () => store.tool,
+    () => store.selectionTarget,
     () => store.navigating,
     () => store.annotation,
   ],
@@ -492,15 +730,28 @@ watch(
   },
 );
 watch(
-  () => [store.meta?.id, store.meta?.session, store.current?.id],
+  [() => store.meta?.id, () => store.meta?.session, () => store.current?.id],
   loadImage,
 );
-watch(() => [store.annotation, store.selected, store.meta], draw, {
-  deep: true,
-});
+watch(
+  () => [
+    store.annotation,
+    store.selected,
+    store.selectedPrompt,
+    store.selectedGeometry,
+    store.selectionTarget,
+    store.dirty,
+    store.meta,
+  ],
+  draw,
+  {
+    deep: true,
+  },
+);
 watch(
   () => store.tool,
   () => {
+    panning.value = false;
     stage?.draggable(space || store.tool === "pan");
     draw();
   },
@@ -509,15 +760,24 @@ onBeforeUnmount(() => {
   invalidateGestures();
   imageGeneration++;
   maskCache.clear();
+  maskHitCache.clear();
+  outlineCache = null;
   loadingMasks.clear();
   background = null;
   candidateImageKey = "";
   candidateImage = null;
   observer?.disconnect();
   stage?.destroy();
+  window.removeEventListener("blur", blur);
   window.removeEventListener("keydown", key);
   window.removeEventListener("keyup", release);
 });
 defineExpose({ fit, zoom, ratio });
 </script>
-<template><div ref="host" class="canvas-host"></div></template>
+<template>
+  <div
+    ref="host"
+    class="canvas-host"
+    :style="{ '--tool-cursor': cursor }"
+  ></div>
+</template>
