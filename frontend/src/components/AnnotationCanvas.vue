@@ -78,7 +78,12 @@ function drawSelectionOutline() {
     outlineCache = null;
     return;
   }
-  if (!obj?.mask || !ann || obj.hidden || store.selectedPrompt !== null) {
+  if (
+    !obj?.mask ||
+    !ann ||
+    !store.layerVisible(obj, "mask") ||
+    store.selectedPrompt !== null
+  ) {
     outlineCache = null;
     return;
   }
@@ -140,7 +145,7 @@ function maskAt(p: { x: number; y: number }) {
   const ann = store.annotation;
   if (!ann) return;
   for (const obj of [...ann.instances].reverse()) {
-    if (obj.hidden) continue;
+    if (!store.layerVisible(obj, "mask")) continue;
     let hit = false;
     if (obj.mask) {
       const color =
@@ -229,7 +234,15 @@ function drawHover() {
   const target = store.hovered,
     ann = store.annotation;
   const obj = ann?.instances.find((o) => o.id === target?.id);
-  if (!target || !obj || obj.hidden || !ann) {
+  if (
+    !target ||
+    !obj ||
+    !store.layerVisible(
+      obj,
+      target.kind === "mask" || target.kind === "box" ? target.kind : "prompts",
+    ) ||
+    !ann
+  ) {
     hoverLayer.batchDraw();
     return;
   }
@@ -391,7 +404,7 @@ function draw() {
     generation = gestureGeneration;
   const liveKeys = new Set(
     a.instances
-      .filter((o) => o.mask && !o.hidden)
+      .filter((o) => o.mask)
       .map((o) =>
         JSON.stringify([
           store.meta?.session ?? store.meta?.id,
@@ -419,14 +432,13 @@ function draw() {
       }),
     );
   for (const object of a.instances) {
-    if (object.hidden) continue;
     const color =
       store.meta?.classes.find((c) => c.id === object.class_id)?.color ??
       "#657286";
     const previewing = !!(
       store.candidate && store.candidates?.response?.instance_id === object.id
     );
-    if (previewing && candidateImage)
+    if (previewing && candidateImage && store.layerVisible(object, "mask"))
       layer.add(
         new Konva.Image({
           image: candidateImage,
@@ -435,7 +447,12 @@ function draw() {
           listening: false,
         }),
       );
-    if (!previewing && object.mask && store.current) {
+    if (
+      !previewing &&
+      object.mask &&
+      store.current &&
+      store.layerVisible(object, "mask")
+    ) {
       const imageId = store.current.id,
         projectId = store.meta?.session ?? store.meta?.id,
         revision = a.revision,
@@ -510,9 +527,11 @@ function draw() {
       store.selected === object.id &&
       store.selectedPrompt === null &&
       store.selectionTarget === "results";
-    for (const points of previewing
-      ? store.candidate!.polygons
-      : object.polygons) {
+    for (const points of !store.layerVisible(object, "mask")
+      ? []
+      : previewing
+        ? store.candidate!.polygons
+        : object.polygons) {
       const shape = new Konva.Line({
         points: points.flat(),
         closed: true,
@@ -556,7 +575,11 @@ function draw() {
       drawSelectionOutline();
     for (const kind of ["box", "prompt_box"] as const) {
       const box = object[kind];
-      if (!box) continue;
+      if (
+        !box ||
+        !store.layerVisible(object, kind === "box" ? "box" : "prompts")
+      )
+        continue;
       const isPrompt = kind === "prompt_box";
       const selectable =
         store.selectionTarget === (isPrompt ? "prompts" : "results");
@@ -702,6 +725,7 @@ function draw() {
       }
     }
     object.points.forEach((p, index) => {
+      if (!store.layerVisible(object, "prompts")) return;
       const selected =
         store.selected === object.id && store.selectedPrompt === index;
       const point = new Konva.Circle({
@@ -819,7 +843,13 @@ onMounted(() => {
     clearHover();
     // Transformer anchors own resizing. Never reinterpret them as mask/background selection.
     if (isTransformHandle(e.target)) return;
-    if (!store.annotation || store.navigating || space || store.tool === "pan")
+    if (
+      !store.annotation ||
+      store.navigating ||
+      space ||
+      store.tool === "pan" ||
+      store.creationLayerBlocked
+    )
       return;
     const p = coordinates(),
       a = store.annotation;
@@ -938,6 +968,7 @@ watch(
     () => store.selectionTarget,
     () => store.navigating,
     () => store.annotation,
+    () => JSON.stringify([store.globalLayers, store.imageView]),
   ],
   invalidateGestures,
   { flush: "sync" },
@@ -971,6 +1002,8 @@ watch(
 watch(
   () => [
     store.annotation,
+    store.globalLayers,
+    store.imageView,
     store.selected,
     store.selectedPrompt,
     store.selectedGeometry,

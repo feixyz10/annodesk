@@ -6,7 +6,14 @@ import { instance } from "../api";
 import { setLocale } from "../i18n";
 import { useProject } from "../stores/project";
 import WorkspaceInspector from "./WorkspaceInspector.vue";
-vi.mock("naive-ui", () => ({ NDropdown: { ssrRender() {} } }));
+vi.mock("naive-ui", () => ({
+  NDropdown: { ssrRender() {} },
+  NPopover: {
+    setup(_: unknown, { slots }: any) {
+      return () => slots.trigger?.();
+    },
+  },
+}));
 vi.mock("./SelectedObjectActions.vue", () => ({
   default: {
     ssrRender(_: unknown, push: (s: string) => void) {
@@ -48,7 +55,7 @@ it.each(["en", "zh-CN"])(
       ? [
           "Search objects",
           "Detection box",
-          "Mask",
+          "Segmentation masks",
           "SAM prompts",
           "Hide object",
           "Lock object",
@@ -67,7 +74,9 @@ it.each(["en", "zh-CN"])(
     expect(html).toMatch(
       /class="(?=[^"]*inspector-object-row)(?=[^"]*hover-preview)[^"]*"/,
     );
-    expect(html).toMatch(/data-column="mask"[^>]*class="hover-preview"/);
+    expect(html).toMatch(
+      /data-column="mask"[^>]*class="[^"]*hover-preview[^"]*"/,
+    );
     expect(html).not.toContain("Selected object properties");
     expect(store.selected).toBeNull();
     expect(html).not.toContain('role="tablist"');
@@ -187,11 +196,13 @@ it("selects without opening details and expands only through explicit disclosure
   await nextTick();
   expect(state.expanded).toBeNull();
   expect(store.selectedGeometry).toBe("mask");
-  state.toggle("a-object", "hidden");
-  state.toggle("a-object", "locked");
+  for (const kind of ["box", "mask", "prompts"] as const)
+    store.setLayer("a-object", kind, false);
+  expect(store.layerVisible(store.annotation!.instances[0], "box")).toBe(false);
+  state.toggleLock("a-object");
   expect(store.selected).toBe("b-object");
   expect(store.annotation!.instances[0]).toMatchObject({
-    hidden: true,
+    hidden: false,
     locked: true,
   });
 });
@@ -295,4 +306,56 @@ it("preserves an expanded selected row while preselecting another object", async
   store.hovered = null;
   await nextTick();
   expect(state.expanded).toBe("a-object");
+});
+
+it("toggles row geometry without selecting or editing and uses the full image despite search", async () => {
+  const { store, state } = await mountedInspector("a-object");
+  const second = store.annotation!.instances[1];
+  const before = JSON.stringify(store.annotation);
+  state.query = "no matches";
+  state.toggleGeometry(second, "mask");
+  expect(store.layerVisible(second, "mask")).toBe(false);
+  expect(store.selected).toBe("a-object");
+  expect(state.objects).toHaveLength(0);
+  expect(state.headingDisabled("mask")).toBe(false);
+  store.toggleImageLayer("mask");
+  expect(store.layerVisible(second, "mask")).toBe(true);
+  store.setLayer("image", "mask", false);
+  state.toggleGeometry(second, "mask");
+  expect(store.layerVisible(second, "mask")).toBe(true);
+  expect(state.toggleDisabled(second, "mask")).toBe(false);
+  expect(JSON.stringify(store.annotation)).toBe(before);
+  expect(store.history).toHaveLength(0);
+});
+it("offers precise selection in the menu, including locked geometry, but requires visibility", async () => {
+  const { store, state } = await mountedInspector();
+  const event = { clientX: 10, clientY: 20, currentTarget: null };
+  store.annotation!.instances[0].locked = true;
+  await state.openMenu(event, "a-object");
+  state.menuAction("select-box");
+  expect(store.selectedGeometry).toBe("box");
+  store.setLayer("a-object", "box", false);
+  await state.openMenu(event, "a-object");
+  expect(
+    state.menuOptions.find((o: any) => o.key === "select-box").disabled,
+  ).toBe(true);
+  state.menuAction("select-box");
+  expect(store.selectedGeometry).toBeNull();
+  state.menuAction("select-prompts");
+  expect(store.selectedPrompt).toBe("box");
+});
+
+it("whole-object hiding permits individual geometry recovery without selecting another row", async () => {
+  const { store, state } = await mountedInspector("a-object");
+  const obj = store.annotation!.instances[1];
+  const before = JSON.stringify(store.annotation);
+  store.setObjectHidden(obj.id, true);
+  expect(state.toggleDisabled(obj, "mask")).toBe(false);
+  expect(store.objectHidden(obj)).toBe(true);
+  state.toggleGeometry(obj, "mask");
+  expect(store.objectLayers(obj).mask).toBe(true);
+  store.setObjectHidden(obj.id, false);
+  expect(store.layerVisible(obj, "mask")).toBe(true);
+  expect(store.selected).toBe("a-object");
+  expect(JSON.stringify(store.annotation)).toBe(before);
 });

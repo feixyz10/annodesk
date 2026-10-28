@@ -1,6 +1,8 @@
 <script setup lang="ts">
-defineProps<{ name: string }>();
+defineProps<{ name: string; slashed?: boolean }>();
 const paths: Record<string, string> = {
+  layers: "M3 7L12 2L21 7L12 12ZM3 12L12 17L21 12M3 17L12 22L21 17",
+  eyepartial: "M2 12Q12 0 22 12Q12 24 2 12ZM9 12H15",
   trash: "M4 6H20M9 6V3H15V6M6 6L7 21H17L18 6M10 10V17M14 10V17",
   close: "M6 6L18 18M6 18L18 6",
   sidebar: "M3 4H21V20H3ZM15 4V20",
@@ -39,5 +41,6 @@ const paths: Record<string, string> = {
       r="8"
     />
     <path :d="paths[name]" />
+    <path v-if="slashed" d="M3 3L21 21" />
   </svg>
 </template>

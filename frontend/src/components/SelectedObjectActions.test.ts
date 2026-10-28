@@ -65,6 +65,14 @@ it.each(["en", "zh-CN"])(
             : "仅删除掩膜",
       );
     }
+    s.setLayer("global", "box", false);
+    const hidden = await render();
+    expect(hidden.match(/type="number" disabled/g)).toHaveLength(4);
+    expect(hidden).toContain(language === "en"
+      ? "Show the detection box to edit its coordinates."
+      : "请先显示检测框，再编辑其坐标。");
+    s.setLayer("global", "box", true);
+    expect(await render()).not.toMatch(/type="number" disabled/);
     s.selected = null;
     const empty = await render();
     expect(empty).toContain('role="toolbar"');

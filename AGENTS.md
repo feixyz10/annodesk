@@ -21,6 +21,10 @@ features from future targets and hardware validation that has not been performed
   revision/fingerprint validation and journaled saves.
 - Internal annotation JSON/RLE is authoritative. `labels` and `labels_seg` are YOLO projections.
   Only create mask-derived boxes through the explicit geometry operation; never invent detection boxes for ordinary mask-only annotations or mark automatic masks human-approved.
+- Visibility is browser-local display state, not annotation data or inference eligibility.
+  Project Layers gates visibility; row geometry toggles and image/object eyes perform local bulk edits.
+  Eye state reflects any actually visible geometry. Bulk hiding must allow individual recovery,
+  and hidden geometry must not be hit-tested or edited invisibly.
 - Statistics SQLite is disposable derived metadata. Log failures must not lose committed annotations.
 - Log important business events explicitly; keep polling, per-box and autosave noise out of UI logs.
   Never log credentials or expanded exception locals.

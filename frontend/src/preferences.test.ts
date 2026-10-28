@@ -7,6 +7,16 @@ import { configureApi, apiBase } from "./api";
 import { setLocale } from "./i18n";
 import { readPreference, writePreference } from "./preferences";
 
+// Keep browser-only positioning out of this SSR test; real visibility controls still render.
+vi.mock("naive-ui", async (original) => ({
+  ...(await original<typeof import("naive-ui")>()),
+  NPopover: {
+    setup(_: unknown, { slots }: any) {
+      return () => slots.trigger?.();
+    },
+  },
+}));
+
 function blockStorage(getter: boolean) {
   vi.stubGlobal("localStorage", undefined);
   const denied = () => {

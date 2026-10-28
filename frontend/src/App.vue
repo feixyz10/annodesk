@@ -28,6 +28,8 @@ import {
 } from "naive-ui";
 import { configureApi, request, type ProjectMeta, type Category } from "./api";
 import { useProject } from "./stores/project";
+import VisibilityControls from "./components/VisibilityControls.vue";
+import { layerNames } from "./visibility";
 import AnnotationCanvas from "./components/AnnotationCanvas.vue";
 import ImageList from "./components/ImageList.vue";
 import ClassPalette from "./components/ClassPalette.vue";
@@ -101,6 +103,7 @@ watch(
   },
 );
 function submitTextPrompt() {
+  if (store.creationLayerBlocked) return;
   if (promptText.value.trim() && store.current && !store.navigating)
     void store.segment(false, promptText.value);
 }
@@ -794,6 +797,7 @@ onBeforeUnmount(() => {
               role="toolbar"
               :aria-label="t('Image view controls')"
             >
+              <VisibilityControls />
               <button
                 :aria-label="t('Pan')"
                 :title="t('Pan · hold Space for temporary pan')"
@@ -851,7 +855,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <form
-            v-if="store.tool === 'text'"
+            v-if="store.tool === 'text' && !store.creationLayerBlocked"
             class="text-prompt-popover"
             :aria-label="t('Text prompt')"
             @submit.prevent="submitTextPrompt"
@@ -885,7 +889,10 @@ onBeforeUnmount(() => {
                 ><button
                   type="submit"
                   :disabled="
-                    !promptText.trim() || !store.current || store.navigating
+                    !promptText.trim() ||
+                    !store.current ||
+                    store.navigating ||
+                    !!store.creationLayerBlocked
                   "
                 >
                   {{ t("Preview text segmentation") }}
@@ -893,6 +900,20 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </form>
+          <div
+            v-if="store.creationLayerBlocked && store.current"
+            class="layer-creation-notice"
+            role="status"
+          >
+            <span>{{
+              t("Hidden layer: {layer}", {
+                layer: t(layerNames[store.creationLayer!]),
+              })
+            }}</span>
+            <button @click="store.revealCreationLayer()">
+              {{ t("Show layer and continue") }}
+            </button>
+          </div>
           <AnnotationCanvas ref="canvas" />
           <div v-if="!store.current" class="empty">
             <h2>{{ t("Open an image dataset") }}</h2>

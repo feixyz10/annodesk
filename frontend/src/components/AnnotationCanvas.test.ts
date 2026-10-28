@@ -910,3 +910,69 @@ it("emphasizes only the selected instance's companion geometry without giving it
   expect(box(obj.id).attrs.opacity).toBe(1);
   expect(nodes().some((n: any) => n.attrs.opacity === 0.65)).toBe(false);
 });
+
+it("hides each geometry independently, including linked outlines, while retaining cached masks", async () => {
+  const store = await mountedCanvas();
+  const obj = store.annotation!.instances[0];
+  obj.box = [0, 0, 9, 9];
+  obj.prompt_box = [1, 1, 8, 8];
+  obj.points = [{ x: 2, y: 3, positive: true }];
+  await flush();
+  const mask = masks().at(-1)!;
+  mask.onload!();
+  await flush();
+  store.selectGeometry(obj.id, "box");
+  await flush();
+  const nodes = () => graph.layers[0].children;
+  store.setLayer("global", "mask", false);
+  await flush();
+  expect(rendered(mask)).toBe(false);
+  expect(
+    nodes().some((n: any) => n.attrs.annotationTarget?.kind === "box"),
+  ).toBe(true);
+  expect(
+    nodes().some((n: any) => n.attrs.annotationTarget?.kind === "prompt_box"),
+  ).toBe(true);
+  expect(
+    nodes().filter(
+      (n: any) => n.attrs.image && !(n.attrs.image instanceof ImageRequest),
+    ),
+  ).toHaveLength(0);
+  store.setLayer("image", "prompts", false);
+  await flush();
+  expect(
+    nodes().some((n: any) =>
+      ["point", "prompt_box"].includes(n.attrs.annotationTarget?.kind),
+    ),
+  ).toBe(false);
+  store.setLayer(obj.id, "box", false);
+  await flush();
+  expect(
+    nodes().some((n: any) => n.attrs.annotationTarget?.kind === "box"),
+  ).toBe(false);
+  const count = masks().length;
+  store.setLayer("global", "mask", true);
+  await flush();
+  expect(rendered(mask)).toBe(true);
+  expect(masks()).toHaveLength(count);
+});
+
+it("cancels an active drawing gesture when visibility changes and blocks drawing into hidden layers", async () => {
+  const store = await mountedCanvas();
+  store.tool = "box";
+  await flush();
+  const stage = graph.stages[0];
+  const count = store.annotation!.instances.length;
+  stage.attrs.pointer = { x: 1, y: 1 };
+  stage.handlers.mousedown({ target: stage });
+  stage.attrs.pointer = { x: 8, y: 8 };
+  stage.handlers.mousemove();
+  store.setLayer("global", "box", false);
+  stage.handlers.mouseup();
+  expect(store.annotation!.instances).toHaveLength(count);
+  stage.handlers.mousedown({ target: stage });
+  stage.handlers.mousemove();
+  stage.handlers.mouseup();
+  expect(store.annotation!.instances).toHaveLength(count);
+  expect(store.dirty).toBe(false);
+});

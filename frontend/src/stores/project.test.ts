@@ -1225,39 +1225,42 @@ it.each([
   "hidden",
   "missing-model",
   "unassociated-mask",
-])("does not auto-segment %s images/objects", async (reason) => {
-  const s = initialized();
-  s.autoSegment = true;
-  s.model = "sam";
-  s.models = {
-    config: "test",
-    default_model: "sam",
-    models: [
-      {
-        id: "sam",
-        name: "SAM",
-        backend: "sam2",
-        available: reason !== "missing-model",
-        path: null,
-        error: null,
-        text_prompts: false,
-      },
-    ],
-  };
-  const target = ann();
-  target.segmentation_review = reason === "reviewed" ? "ok" : "pending";
-  target.excluded = reason === "excluded";
-  target.instances[0].locked = reason === "locked";
-  target.instances[0].hidden = reason === "hidden";
-  if (reason === "unassociated-mask")
-    target.segmentation_blocked = [target.instances[0].id];
-  mock.mockResolvedValue(target);
-  await s.load(s.images[1]);
-  for (let i = 0; i < 10; i++) await Promise.resolve();
-  expect(mock.mock.calls.some(([path]) => path.endsWith("/segment"))).toBe(
-    false,
-  );
-});
+])(
+  "checks automatic segmentation eligibility independently of display (%s)",
+  async (reason) => {
+    const s = initialized();
+    s.autoSegment = true;
+    s.model = "sam";
+    s.models = {
+      config: "test",
+      default_model: "sam",
+      models: [
+        {
+          id: "sam",
+          name: "SAM",
+          backend: "sam2",
+          available: reason !== "missing-model",
+          path: null,
+          error: null,
+          text_prompts: false,
+        },
+      ],
+    };
+    const target = ann();
+    target.segmentation_review = reason === "reviewed" ? "ok" : "pending";
+    target.excluded = reason === "excluded";
+    target.instances[0].locked = reason === "locked";
+    target.instances[0].hidden = reason === "hidden";
+    if (reason === "unassociated-mask")
+      target.segmentation_blocked = [target.instances[0].id];
+    mock.mockResolvedValue(target);
+    await s.load(s.images[1]);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(mock.mock.calls.some(([path]) => path.endsWith("/segment"))).toBe(
+      reason === "hidden",
+    );
+  },
+);
 
 it("requires explicit empty confirmation for approval but permits needs-review and exclusion", () => {
   const s = initialized();
@@ -1276,4 +1279,54 @@ it("requires explicit empty confirmation for approval but permits needs-review a
   expect(s.annotation!.segmentation_review).toBe("ok");
   s.setExplicitEmpty(false);
   expect(s.annotation!.segmentation_review).toBe("pending");
+});
+
+it("visibility changes clear hidden geometry selections without saving annotations", () => {
+  const s = initialized();
+  const obj = s.annotation!.instances[0];
+  obj.mask = { counts: "test" };
+  const before = JSON.stringify(s.annotation);
+  s.selectGeometry(obj.id, "box");
+  s.setLayer("global", "mask", false);
+  expect(s.selectedGeometry).toBe("box");
+  s.setLayer("image", "box", false);
+  expect(s.selectedGeometry).toBeNull();
+  expect(s.selected).toBe(obj.id);
+  s.deleteSelected();
+  expect(JSON.stringify(s.annotation)).toBe(before);
+  expect(s.dirty).toBe(false);
+  s.tool = "box";
+  // Bulk hiding affects existing geometry, not newly drawn objects.
+  expect(s.creationLayerBlocked).toBe("");
+  s.revealCreationLayer();
+  expect(s.creationLayerBlocked).toBe("");
+  expect(s.globalLayers.mask).toBe(false);
+});
+
+it("keeps whole-object deletion available after unrelated visibility changes", () => {
+  const s = initialized();
+  const obj = s.annotation!.instances[0];
+  const other = instance("c", [2, 2, 7, 7]);
+  s.annotation!.instances.push(other);
+  s.selectObjectRow(obj.id);
+  s.setLayer(other.id, "box", false);
+  s.setLayer("global", "mask", false);
+  s.deleteSelected();
+  expect(s.annotation!.instances.map((item) => item.id)).toEqual([other.id]);
+});
+
+it.each([false, true])("blocks invisible coordinate edits until the layer is shown (prompt=%s)", (prompt) => {
+  const s = initialized();
+  const obj = s.annotation!.instances[0];
+  obj.prompt_box = [1, 1, 8, 8];
+  const kind = prompt ? "prompts" : "box";
+  s.setLayer(obj.id, kind, false);
+  const before = JSON.stringify(s.annotation);
+  s.editBox(obj.id, [2, 2, 9, 9], prompt);
+  expect(JSON.stringify(s.annotation)).toBe(before);
+  expect(s.dirty).toBe(false);
+  s.setLayer(obj.id, kind, true);
+  s.editBox(obj.id, [2, 2, 9, 9], prompt);
+  expect(prompt ? obj.prompt_box : obj.box).toEqual([2, 2, 9, 9]);
+  expect(s.dirty).toBe(true);
 });

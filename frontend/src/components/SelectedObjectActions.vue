@@ -5,6 +5,7 @@ import { t, toolLabel } from "../i18n";
 import { useProject } from "../stores/project";
 const store = useProject();
 const blocked = computed(() => !!(store.object?.locked || store.navigating));
+const boxVisible = computed(() => !!store.object && store.layerVisible(store.object, "box"));
 const prompts = computed(
   () =>
     !!(
@@ -69,12 +70,7 @@ function editCoordinate(event: Event, index: number) {
         <div class="property-button-row">
           <button
             class="primary"
-            :disabled="
-              blocked ||
-              store.object.hidden ||
-              store.annotation?.excluded ||
-              !prompts
-            "
+            :disabled="blocked || store.annotation?.excluded || !prompts"
             :title="
               t(
                 'Update the selected mask from its current points or box · Enter',
@@ -161,12 +157,15 @@ function editCoordinate(event: Event, index: number) {
         <strong>{{ t("Detection box") }}</strong>
         <details v-if="store.object.box" class="box-coordinate-settings">
           <summary>{{ t("Box coordinates") }}</summary>
+          <p v-if="!boxVisible" class="muted">
+            {{ t("Show the detection box to edit its coordinates.") }}
+          </p>
           <div v-if="store.object.box" class="coords">
             <label v-for="(_, i) in store.object.box" :key="i"
               >{{ ["x1", "y1", "x2", "y2"][i]
               }}<input
                 type="number"
-                :disabled="blocked"
+                :disabled="blocked || !boxVisible"
                 :value="store.object.box[i]"
                 @change="editCoordinate($event, i)"
             /></label>

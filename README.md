@@ -44,7 +44,7 @@ weights remain external and resolve from the configured model root.
 Version 0.2.1 removes frontend build tooling from the user CLI, orders help by task,
 and keeps the shipped guide focused on installation, annotation and operation.
 
-The current release is **0.3.2**; see the [release notes](docs/releases/0.3.2.md) for changes, upgrade guidance and verification boundaries.
+The current release is **0.4.0**; see the [release notes](docs/releases/0.4.0.md) for changes, upgrade guidance and verification boundaries.
 
 Version 0.2.2 replaces the standalone `api` command with `serve --api-only`.
 
@@ -60,8 +60,9 @@ inference dependencies, while manual annotation remains available.
 The release regression suite covers journal recovery, first-read materialization,
 queued inference snapshots, cross-project and cross-image edits, category/tag draft
 rollback, batch/trash coordination, EXIF/TIFF coordinates and virtual-list bounds.
-The 0.3.2 regression check passed 247 Python tests and 184 frontend tests, Ruff,
-the frontend build and an installed-wheel CLI/API/docs/static-resource smoke test.
+Release checks include Ruff, Python/frontend regression suites, the frontend build
+and an installed-wheel CLI/API/docs/static-resource smoke test. Version-specific results
+and limitations are recorded in the release notes.
 All eight user command help pages are checked without loading inference dependencies.
 Parameter help explains omitted/None values, configuration precedence, device plans and
 write policies. Read-only model listing exposes no ineffective logging options.
@@ -140,7 +141,7 @@ Exports remain directory exports (no archive or browser upload/download of datas
 Tasks opens automatically when a task starts; closing it leaves a compact toolbar
 progress indicator without occupying canvas space. Logs is independent of an open project.
 
-Package and frontend metadata are aligned at 0.3.2. Releases use annotated Git tags;
+Package and frontend metadata are aligned at 0.4.0. Releases use annotated Git tags;
 commit messages describe changes without version numbers. Publishing is an explicit
 release step after checks and an outside-checkout wheel smoke test.
 
@@ -171,7 +172,9 @@ Box preselection uses the same white-backed slate solid border as masks; selecte
 
 When a detection box and mask belong to the same instance, selecting either lightly outlines the other with a thinner, subdued edge. This does not select both: resize handles and Delete still act only on the explicitly selected geometry. SAM prompts and other instances are not linked by this highlight.
 
-Point and box prompts update the selected mask automatically after a short debounce. Prompt previews are read-only until the client validates its current editing context. Creation tools and selection targets separate annotation results from SAM prompts. Detection boxes use solid class colors; SAM box prompts use amber dashes. Direct geometry buttons select overlapping targets. Lossless mask pixels, boxes and individual prompts can be selected independently; deletion preserves the other geometry. `N` starts the next object; clearing all prompts preserves the existing mask without running inference. `Shift+X` or `Shift+Delete` removes an entire object with its prompts, with undo support. `Segment current` fills missing masks and reports when there is no work. The canvas keeps a single 48px toolbar; the right inspector has fixed geometry columns, a single expanded object row for class/inference/geometry actions, and permanent image properties below. Both regions scroll independently with adjustable proportions. Missing geometry keeps a disabled slot; More and right-click share one context menu. Selection never changes canvas size; Clear all prompts removes unlocked prompts across the current image with one undo step. Resize handles are kept out of canvas selection routing.
+Point and box prompts update the selected mask automatically after a short debounce. Prompt previews are read-only until the client validates its current editing context. Creation tools and selection targets separate annotation results from SAM prompts. Detection boxes use solid class colors; SAM box prompts use amber dashes. More/right-click offers precise selection of overlapping geometry; row geometry icons toggle visibility. Lossless mask pixels, boxes and individual prompts can be selected independently; deletion preserves the other geometry. `N` starts the next object; clearing all prompts preserves the existing mask without running inference. `Shift+X` or `Shift+Delete` removes an entire object with its prompts, with undo support. `Segment current` fills missing masks and reports when there is no work. The canvas keeps a single 48px toolbar; the right inspector has fixed geometry columns, a single expanded object row for class/inference/geometry actions, and permanent image properties below. Both regions scroll independently with adjustable proportions. Missing geometry keeps a disabled slot; More and right-click share one context menu. Selection never changes canvas size; Clear all prompts removes unlocked prompts across the current image with one undo step. Resize handles are kept out of canvas selection routing.
+
+Layers controls project-wide geometry display. Object-row icons independently toggle boxes, masks and prompts; geometry column headings apply bulk changes across the current image. Row and heading eyes are bright whenever any geometry in their scope is visible: click to hide that scope, or show all when fully hidden. Bulk hiding never locks child controls; one geometry or instance can be restored immediately. Visibility affects browser display only, not annotations or inference eligibility. Hidden geometry is excluded from canvas selection and linked outlines. Visibility changes cancel incomplete gestures.
 
 Mask-derived boxes support per-side pixel/ratio padding and the smaller of both, clipped to image bounds. UI uses percentages of mask bounds; CLI/API ratios use fractions (`--box-padding-ratio 0.1` = 10% per side). Defaults preserve tight bounds. Settings are available for current-image and batch geometry operations; no model is loaded. Undo/redo have a separate History tool group, and Select SAM prompts directly enables prompt selection.
 

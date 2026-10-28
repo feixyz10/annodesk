@@ -5,6 +5,13 @@ import { t, taskLabel } from "../i18n";
 import { useProject } from "../stores/project";
 import { readPreference, writePreference } from "../preferences";
 import SelectedObjectActions from "./SelectedObjectActions.vue";
+import type { Instance } from "../api";
+import {
+  hasLayerGeometry,
+  layerKinds,
+  layerNames,
+  type LayerKind,
+} from "../visibility";
 import Icon from "./Icon.vue";
 const store = useProject();
 const query = ref("");
@@ -79,10 +86,7 @@ watch(query, () => {
   if (list.value) list.value.scrollTop = 0;
 });
 function select(id: string) {
-  if (store.selected === id) return;
-  store.selected = id;
-  store.selectedGeometry = null;
-  store.selectedPrompt = null;
+  store.selectObjectRow(id);
   if (expanded.value !== id) expanded.value = null;
   void reveal();
 }
@@ -94,14 +98,69 @@ function geometry(id: string, kind: "box" | "mask" | "prompts") {
   if (expanded.value !== id) expanded.value = null;
   void reveal();
 }
-function toggle(id: string, key: "hidden" | "locked") {
+const layerIcons = { box: "box", mask: "mask", prompts: "promptbox" };
+const missingLabels = {
+  box: "No detection box",
+  mask: "No mask",
+  prompts: "No SAM prompts",
+};
+function toggleDisabled(obj: Instance, kind: LayerKind) {
+  return (
+    store.navigating ||
+    !hasLayerGeometry(obj, kind) ||
+    !store.globalLayers[kind]
+  );
+}
+function toggleLabel(obj: Instance, kind: LayerKind) {
+  if (!hasLayerGeometry(obj, kind)) return t(missingLabels[kind]);
+  const action = t(
+    store.layerVisible(obj, kind) ? "Hide {layer}" : "Show {layer}",
+    { layer: t(layerNames[kind]) },
+  );
+  const block = !store.globalLayers[kind]
+    ? t("Show this layer in global Layers first")
+    : "";
+  return block ? `${action} · ${block}` : action;
+}
+function toggleGeometry(obj: Instance, kind: LayerKind) {
+  if (!toggleDisabled(obj, kind))
+    store.setLayer(obj.id, kind, !store.objectLayers(obj)[kind]);
+}
+function headingDisabled(kind: LayerKind) {
+  return (
+    store.navigating ||
+    !store.globalLayers[kind] ||
+    !store.annotation?.instances.some((o) => hasLayerGeometry(o, kind))
+  );
+}
+function headingLabel(kind: LayerKind) {
+  const action = t(
+    store.imageLayerState(kind) === "all"
+      ? "Hide all {layer} on this image"
+      : "Show all {layer} on this image",
+    { layer: t(layerNames[kind]) },
+  );
+  return !store.globalLayers[kind]
+    ? `${action} · ${t("Show this layer in global Layers first")}`
+    : action;
+}
+function selectedGeometry(obj: Instance, kind: LayerKind) {
+  return (
+    store.selected === obj.id &&
+    (kind === "prompts"
+      ? store.selectedPrompt !== null
+      : store.selectedGeometry === kind)
+  );
+}
+function toggleLock(id: string) {
   if (store.navigating) return;
   const obj = store.annotation?.instances.find((o) => o.id === id);
   if (!obj) return;
   store.checkpoint();
-  obj[key] = !obj[key];
+  obj.locked = !obj.locked;
   store.changed();
 }
+
 function disclosure(id: string) {
   if (expanded.value === id && store.selected === id) expanded.value = null;
   else {
@@ -138,6 +197,21 @@ const menuOptions = computed<DropdownOption[]>(() => {
   const blocked = obj.locked || store.navigating;
   const prompts = !!(obj.box || obj.prompt_box || obj.points.length);
   return [
+    ...layerKinds.map((kind) => ({
+      key: `select-${kind}`,
+      label: t(
+        {
+          box: "Select detection box",
+          mask: "Select mask",
+          prompts: "Select prompts",
+        }[kind],
+      ),
+      disabled:
+        store.navigating ||
+        !hasLayerGeometry(obj, kind) ||
+        !store.layerVisible(obj, kind),
+    })),
+    { key: "separator-selection", type: "divider" },
     { key: "class", label: t("Change class"), disabled: blocked },
     {
       key: "refine",
@@ -145,7 +219,6 @@ const menuOptions = computed<DropdownOption[]>(() => {
       disabled:
         blocked ||
         store.task !== "segmentation" ||
-        obj.hidden ||
         store.annotation?.excluded ||
         !prompts,
     },
@@ -197,7 +270,9 @@ function menuAction(key: string) {
   )
     return;
   menu.value = null;
-  if (key === "class") store.openClassPicker();
+  if (key === "select-box" || key === "select-mask" || key === "select-prompts")
+    geometry(context.id, key.slice(7) as LayerKind);
+  else if (key === "class") store.openClassPicker();
   else if (key === "refine") void store.segment();
   else if (key === "candidates") void store.generateCandidates();
   else if (key === "box") store.boxConversion = "selected";
@@ -274,14 +349,57 @@ onBeforeUnmount(() => cleanup());
           :placeholder="t('Search objects…')"
         />
         <div ref="list" class="inspector-object-list">
-          <div class="object-column-headings" aria-hidden="true">
-            <span>{{ t("Class") }}</span
-            ><span :title="t('Detection box')"><Icon name="box" /></span
-            ><span :title="t('Mask')"><Icon name="mask" /></span
-            ><span :title="t('SAM prompts')"><Icon name="promptbox" /></span
-            ><span :title="t('Visibility')"><Icon name="eye" /></span
-            ><span :title="t('Locked')"><Icon name="lock" /></span
-            ><span :title="t('More object actions')"><Icon name="more" /></span
+          <div class="object-column-headings">
+            <span>{{ t("Class") }}</span>
+            <button
+              v-for="kind in layerKinds"
+              :key="kind"
+              class="layer-heading"
+              :data-layer-heading="kind"
+              :class="{
+                'hidden-geometry': store.imageLayerState(kind) === 'none',
+              }"
+              :disabled="headingDisabled(kind)"
+              :title="headingLabel(kind)"
+              :aria-label="headingLabel(kind)"
+              :aria-pressed="
+                store.imageLayerState(kind) === 'mixed'
+                  ? 'mixed'
+                  : store.imageLayerState(kind) === 'all'
+              "
+              @click="!headingDisabled(kind) && store.toggleImageLayer(kind)"
+            >
+              <Icon
+                :name="layerIcons[kind]"
+                :slashed="store.imageLayerState(kind) === 'none'"
+              />
+            </button>
+            <button
+              class="layer-heading"
+              data-layer-heading="visibility"
+              :class="{ 'visibility-hidden': !store.imageHasVisibleGeometry }"
+              :disabled="!store.current || store.navigating"
+              :title="
+                t(
+                  !store.imageHasVisibleGeometry
+                    ? 'Show annotations on this image'
+                    : 'Hide all annotations on this image',
+                )
+              "
+              :aria-label="
+                t(
+                  !store.imageHasVisibleGeometry
+                    ? 'Show annotations on this image'
+                    : 'Hide all annotations on this image',
+                )
+              "
+              :aria-pressed="store.imageHasVisibleGeometry"
+              @click="store.setImageHidden(store.imageHasVisibleGeometry)"
+            >
+              <Icon :name="!store.imageHasVisibleGeometry ? 'eyeoff' : 'eye'" />
+            </button>
+            <span :title="t('Locked')"><Icon name="lock" /></span>
+            <span :title="t('More object actions')"><Icon name="more" /></span
             ><span></span>
           </div>
 
@@ -321,106 +439,66 @@ onBeforeUnmount(() => cleanup());
                 ><span>{{ name(object.class_id) }}</span>
               </button>
               <button
-                data-column="box"
-                :disabled="!object.box"
+                v-for="kind in layerKinds"
+                :key="kind"
+                :data-column="kind"
+                class="geometry-visibility"
+                :disabled="toggleDisabled(object, kind)"
                 :class="{
-                  'missing-geometry': !object.box,
+                  'missing-geometry': !hasLayerGeometry(object, kind),
+                  'hidden-geometry':
+                    hasLayerGeometry(object, kind) &&
+                    !store.layerVisible(object, kind),
+                  'geometry-selected': selectedGeometry(object, kind),
                   'hover-preview':
                     store.hovered?.id === object.id &&
-                    store.hovered.kind === 'box',
+                    (kind === 'prompts'
+                      ? ['point', 'prompt_box'].includes(store.hovered.kind)
+                      : store.hovered.kind === kind),
                 }"
-                :title="t(object.box ? 'Detection box' : 'No detection box')"
-                :aria-label="
-                  t(object.box ? 'Detection box' : 'No detection box')
-                "
+                :title="toggleLabel(object, kind)"
+                :aria-label="toggleLabel(object, kind)"
                 :aria-pressed="
-                  store.selected === object.id &&
-                  store.selectedGeometry === 'box'
+                  hasLayerGeometry(object, kind) &&
+                  store.layerVisible(object, kind)
                 "
-                @click="geometry(object.id, 'box')"
-              >
-                <Icon v-if="object.box" name="box" /><span
-                  v-else
-                  aria-hidden="true"
-                  >—</span
-                >
-              </button>
-              <button
-                data-column="mask"
-                :disabled="!(object.mask || object.polygons.length)"
-                :class="{
-                  'missing-geometry': !(object.mask || object.polygons.length),
-                  'hover-preview':
-                    store.hovered?.id === object.id &&
-                    store.hovered.kind === 'mask',
-                }"
-                :title="
-                  t(object.mask || object.polygons.length ? 'Mask' : 'No mask')
-                "
-                :aria-label="
-                  t(object.mask || object.polygons.length ? 'Mask' : 'No mask')
-                "
-                :aria-pressed="
-                  store.selected === object.id &&
-                  store.selectedGeometry === 'mask'
-                "
-                @click="geometry(object.id, 'mask')"
+                @click="toggleGeometry(object, kind)"
               >
                 <Icon
-                  v-if="object.mask || object.polygons.length"
-                  name="mask"
-                /><span v-else aria-hidden="true">—</span>
-              </button>
-              <button
-                data-column="prompts"
-                :disabled="!(object.prompt_box || object.points.length)"
-                :class="{
-                  'hover-preview':
-                    store.hovered?.id === object.id &&
-                    ['point', 'prompt_box'].includes(store.hovered.kind),
-                  'missing-geometry': !(
-                    object.prompt_box || object.points.length
-                  ),
-                }"
-                :title="
-                  t(
-                    object.prompt_box || object.points.length
-                      ? 'SAM prompts'
-                      : 'No SAM prompts',
-                  )
-                "
-                :aria-label="
-                  t(
-                    object.prompt_box || object.points.length
-                      ? 'SAM prompts'
-                      : 'No SAM prompts',
-                  )
-                "
-                :aria-pressed="
-                  store.selected === object.id && store.selectedPrompt !== null
-                "
-                @click="geometry(object.id, 'prompts')"
-              >
-                <Icon
-                  v-if="object.prompt_box || object.points.length"
-                  name="promptbox"
-                /><span v-else aria-hidden="true">—</span>
+                  v-if="hasLayerGeometry(object, kind)"
+                  :name="layerIcons[kind]"
+                  :slashed="!store.layerVisible(object, kind)"
+                />
+                <span v-else aria-hidden="true">—</span>
+                <span
+                  v-if="selectedGeometry(object, kind)"
+                  class="geometry-selection-dot"
+                  :aria-label="t('Selected geometry')"
+                ></span>
               </button>
               <button
                 data-column="visibility"
-                :title="t(object.hidden ? 'Show object' : 'Hide object')"
-                :aria-label="t(object.hidden ? 'Show object' : 'Hide object')"
-                :aria-pressed="object.hidden"
-                @click="toggle(object.id, 'hidden')"
+                :class="{ 'visibility-hidden': store.objectHidden(object) }"
+                :disabled="store.navigating"
+                :aria-label="
+                  t(store.objectHidden(object) ? 'Show object' : 'Hide object')
+                "
+                :title="
+                  t(store.objectHidden(object) ? 'Show object' : 'Hide object')
+                "
+                :aria-pressed="!store.objectHidden(object)"
+                @click="
+                  store.setObjectHidden(object.id, !store.objectHidden(object))
+                "
               >
-                <Icon :name="object.hidden ? 'eyeoff' : 'eye'" />
+                <Icon :name="store.objectHidden(object) ? 'eyeoff' : 'eye'" />
               </button>
               <button
                 data-column="lock"
                 :title="t(object.locked ? 'Unlock object' : 'Lock object')"
                 :aria-label="t(object.locked ? 'Unlock object' : 'Lock object')"
                 :aria-pressed="object.locked"
-                @click="toggle(object.id, 'locked')"
+                @click="toggleLock(object.id)"
               >
                 <Icon :name="object.locked ? 'lock' : 'unlock'" />
               </button>

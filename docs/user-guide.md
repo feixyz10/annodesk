@@ -2,7 +2,7 @@
 
 AnnoDesk annotates detection boxes and instance masks in images. You can import existing YOLO detection labels, generate masks from boxes, and review the results manually. The browser interface supports English and Simplified Chinese with a light theme. Images, models, and annotations stay on the computer running the backend.
 
-Version: 0.3.2.
+Version: 0.4.0.
 
 ## 1. Installation
 
@@ -27,13 +27,13 @@ Or in Windows PowerShell:
 Install a local release package. For offline installation, prepare its dependencies beforehand:
 
 ```sh
-python -m pip install ./annodesk-0.3.2-py3-none-any.whl
+python -m pip install ./annodesk-0.4.0-py3-none-any.whl
 ```
 
 Once this version is available on PyPI, you can also install it by name:
 
 ```sh
-python -m pip install "annodesk==0.3.2"
+python -m pip install "annodesk==0.4.0"
 ```
 
 A standard installation includes the shared detection and segmentation dependencies, Ultralytics / PyTorch. No extra installation option is needed. Check the environment with:
@@ -49,7 +49,7 @@ Dependency installation may access a Python package index. Inference never downl
 Before upgrading, stop the service and back up the entire project, especially `.annodesk/`. Then run:
 
 ```sh
-python -m pip install --upgrade ./annodesk-0.3.2-py3-none-any.whl
+python -m pip install --upgrade ./annodesk-0.4.0-py3-none-any.whl
 ```
 
 For upgrades from PyPI, use the package name and appropriate version. Restart the service and refresh the page after upgrading. Existing annotations retain their review states.
@@ -567,7 +567,7 @@ Both English (`user-guide.md`) and Simplified Chinese (`user-guide-cn.md`) guide
 
 ### Instance list and image properties
 
-The canvas has a single top toolbar for model settings, current-image processing, automatic processing, pan, zoom, and Fit. The upper-right instance list has fixed columns for box, mask, SAM prompts, visibility, lock, and more. Missing geometry keeps a disabled gray slot. The Objects region stays open; each instance's details start collapsed. Single-clicking a name or geometry icon only selects it. Double-click the name or use the chevron to expand/collapse details without changing selection. Selecting another instance closes the previous details without opening the new one. Visibility/lock controls do not change selection.
+The canvas has a single top toolbar for model settings, current-image processing, automatic processing, pan, zoom, and Fit. The upper-right instance list has fixed columns for box, mask, SAM prompts, visibility, lock, and more. Missing geometry keeps a disabled gray slot. The Objects region stays open; each instance's details start collapsed. Single-clicking a name selects the instance; geometry icons independently toggle visibility. Double-click the name or use the chevron to expand/collapse details without changing selection. Selecting another instance closes the previous details without opening the new one. Visibility/lock controls retain the selected instance; hiding selected geometry clears its editing target.
 
 Expanded details provide searchable class assignment, mask refinement, candidates, prompt clearing, mask-to-box conversion, prompt details, and box coordinates. Individual points or prompt boxes can be selected through prompt details. More and right-click open the same menu. Locked instances cannot be directly modified or deleted. Metadata/statistics refreshes preserve zoom, pan, instance search, and expanded details.
 
@@ -578,6 +578,20 @@ Three buttons above object search act on the whole image:
 - **Masks to boxes** opens the padding settings window before adding missing detection boxes to unlocked instances. Existing boxes are preserved. Single-instance Create/Recalculate and the context menu open the same settings. Choose pixels per side or a percentage of the mask bounding box width/height; **min** uses the smaller of the two on each axis. Results are clipped to image bounds. Zero produces a tight box. Settings are shared with batch processing for this page session. Confirmation freezes the target and padding; selection changes during saving do not redirect the operation. New annotation edits during saving require running it again.
 
 Image properties occupy the lower-right region. Drag the middle divider to adjust the split (55% by default, 25%–75% range); when focused, use ↑ / ↓, or double-click to reset. Both regions scroll independently. The properties button at the far right of the canvas toolbar toggles the inspector; narrow windows provide Image details.
+
+### Independent layer visibility
+
+The pale blue-gray column-heading row with a thin bottom divider contains image-wide controls. Its icons match the instance icons in size and visibility styling; hover hints identify the image-wide scope.
+
+Use **Layers** beside Pan/Zoom for project-wide switches for **Detection boxes**, **Segmentation masks** and **SAM prompts**. Detection view shows only boxes; Segmentation view shows masks and prompts; All layers enables all project switches. These presets leave local geometry choices and review tasks unchanged.
+
+Each row’s box, mask and prompt icons independently toggle that geometry. Missing geometry is a disabled dash; hidden geometry is muted and slashed. A separate blue dot marks the selected geometry. More/right-click offers precise geometry selection, also available on the canvas.
+
+The row eye and column-heading eye summarize actual visibility: **bright if any geometry is visible; dim if none is visible**. Click a bright eye to hide its entire scope; click a dim eye to show the scope (one instance or all instances on the current image). These are bulk actions, not parent locks, and do not restore a previous combination. After hiding the whole image, click an instance eye to show that instance, or an individual icon to show just that geometry. Both eyes update immediately. Search does not limit image-level actions.
+
+The three geometry column headings summarize their respective type across all image instances. All visible → hide that type; partially or fully hidden → show that type. Bulk changes do not prevent further individual changes. Newly drawn objects remain visible when their project layer is enabled. Project-wide switches still take precedence: enable a globally hidden layer in Layers before showing it locally.
+
+Visibility preferences are stored only in this browser per project root/ID and image, with session fallback if storage is unavailable. Hidden geometry is excluded from canvas hover, selection, transforms and linked outlines. Show a detection box before editing its numeric coordinates. Hiding selected geometry clears its editing selection but retains its object row; Delete does not fall back to deleting the whole object. Changing visibility cancels unfinished gestures. A hidden project layer or hidden existing prompt target blocks invisible drawing until **Show layer and continue** is clicked. Visibility does not alter annotations, review status, undo history, saving, export, statistics or inference eligibility. Legacy saved whole-object hidden flags initialize local geometry choices only.
 
 ### Selection, prompts, and box padding
 

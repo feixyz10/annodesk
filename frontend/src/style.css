@@ -1129,7 +1129,8 @@ button {
   white-space: nowrap;
   font-size: 12px;
 }
-.inspector-object-row svg {
+.inspector-object-row svg,
+.object-column-headings svg {
   width: 16px;
   height: 16px;
 }
@@ -1334,9 +1335,10 @@ button {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: #fff;
+  background: #f4f7fc;
+  border-bottom-color: #dce3ee;
   min-height: 25px;
-  color: #6b7890;
+  color: #283445;
   font-size: 11px;
 }
 .object-column-headings > span {
@@ -1347,10 +1349,6 @@ button {
 .object-column-headings > span:first-child {
   justify-content: flex-start;
   padding-inline-start: 4px;
-}
-.object-column-headings svg {
-  width: 13px;
-  height: 13px;
 }
 .inspector-object-row button {
   min-width: 0;
@@ -1651,4 +1649,143 @@ button {
 .inspector-object-row button.hover-preview:not([aria-pressed="true"]) {
   background: #dfe6ef;
   color: #354d6c;
+}
+
+.visibility-panel {
+  width: min(344px, calc(100vw - 48px));
+  font-size: 12px;
+  color: #263549;
+}
+.visibility-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.visibility-panel header button {
+  border: 0;
+  background: transparent;
+  padding: 4px;
+  display: flex;
+}
+.visibility-panel svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+}
+.visibility-presets {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0;
+}
+.visibility-presets button {
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+  font-size: 12px;
+  padding: 7px 5px;
+}
+.visibility-presets button[aria-pressed="true"] {
+  background: #edf2ff;
+  color: #2549b8;
+  border-color: #a9bde9;
+}
+.visibility-panel input {
+  width: 16px;
+  height: 16px;
+  accent-color: #315fe9;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.visibility-panel input:disabled {
+  cursor: default;
+}
+.visibility-panel p {
+  font-size: 11px;
+  color: #657286;
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+.visibility-note {
+  border-top: 1px solid #e5eaf0;
+  padding-top: 10px;
+}
+.visibility-layer-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 2px;
+}
+.object-column-headings button.hidden-geometry,
+.inspector-object-row button.hidden-geometry {
+  color: #8190a6;
+  background: #f3f5f8;
+}
+.layer-creation-notice {
+  position: absolute;
+  z-index: 5;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid #cdd7e5;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.layer-creation-notice button {
+  flex-shrink: 0;
+  color: #2549b8;
+}
+
+.object-column-headings .layer-heading {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 3px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+.object-column-headings .layer-heading:hover:not(:disabled) {
+  background: #edf2fc;
+}
+
+.inspector-object-row .geometry-visibility {
+  position: relative;
+}
+.inspector-object-row .geometry-visibility[aria-pressed="true"] {
+  background: transparent;
+  color: inherit;
+}
+.inspector-object-row .geometry-visibility.hover-preview {
+  background: #e4eaf3;
+}
+.geometry-selection-dot {
+  position: absolute;
+  bottom: 0;
+  left: calc(50% - 2px);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #315af0;
+}
+
+.inspector-object-row button[data-column="visibility"][aria-pressed="true"] {
+  background: transparent;
+  color: inherit;
+}
+
+.object-column-headings .visibility-hidden,
+.inspector-object-row button.visibility-hidden {
+  color: #8491a5;
 }

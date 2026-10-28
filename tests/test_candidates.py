@@ -102,16 +102,12 @@ def test_stale_application_preserves_data(tmp_path, conflict):
     ]["mask"]
 
 
-@pytest.mark.parametrize(
-    "reason", ["locked", "hidden", "excluded", "no_prompt", "text", "unsupported"]
-)
+@pytest.mark.parametrize("reason", ["locked", "excluded", "no_prompt", "text", "unsupported"])
 def test_invalid_preview_never_changes_annotation(tmp_path, reason):
     project, _, image_id, body = setup(tmp_path)
     ann = project.annotation(image_id)
     if reason == "locked":
         ann.instances[0].locked = True
-    if reason == "hidden":
-        ann.instances[0].hidden = True
     if reason == "excluded":
         ann.excluded = True
     if reason == "no_prompt":
@@ -260,3 +256,14 @@ def test_single_mask_prompt_preview_uses_predict_and_never_writes(tmp_path):
     assert result["items"][0]["quality"] is None
     assert decode_mask(result["items"][0]["mask"]).sum() == 36
     assert project.annotation(image_id).model_dump() == original
+
+
+def test_display_hidden_does_not_block_model_preview(tmp_path):
+    project, _, image_id, body = setup(tmp_path)
+    ann = project.annotation(image_id)
+    ann.instances[0].hidden = True
+    ann = project.save(image_id, ann)
+    body.expected_revision = ann.revision
+    result = preview_candidates(project, image_id, body, Candidates())
+    assert result["items"]
+    assert project.annotation(image_id).revision == ann.revision

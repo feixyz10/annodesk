@@ -42,8 +42,6 @@ def target(annotation, instance_id):
         raise ValueError("Select an object with points or a box prompt")
     if obj.locked:
         raise ValueError("Object is locked")
-    if obj.hidden:
-        raise ValueError("Unhide this object before generating candidates")
     if not (obj.box or obj.prompt_box or obj.points):
         raise ValueError("Select an object with points or a box prompt")
     return obj

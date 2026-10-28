@@ -1,3 +1,4 @@
+import { createVisibility, type LayerKind } from "../visibility";
 import { defineStore } from "pinia";
 import { computed, ref, watch, onScopeDispose } from "vue";
 import {
@@ -24,6 +25,11 @@ export const useProject = defineStore("project", () => {
     images = ref<ImageItem[]>([]),
     current = ref<ImageItem | null>(null),
     annotation = ref<Annotation | null>(null);
+  const visibility = createVisibility(() => ({
+    project: JSON.stringify([meta.value?.root, meta.value?.id]),
+    image: current.value?.id,
+    instances: annotation.value?.instances ?? [],
+  }));
   const hovered = ref<HoverTarget | null>(null);
   const selected = ref<string | null>(null),
     defaultClass = ref<string | null>(null),
@@ -199,6 +205,20 @@ export const useProject = defineStore("project", () => {
   );
   const selectedPrompt = ref<number | "box" | null>(null);
   const selectedGeometry = ref<"box" | "mask" | null>(null);
+  const hiddenSelection = ref(false);
+  watch(
+    [selected, selectedGeometry, selectedPrompt],
+    () => {
+      hiddenSelection.value = false;
+    },
+    { flush: "sync" },
+  );
+  function selectObjectRow(id: string) {
+    selected.value = id;
+    selectedGeometry.value = null;
+    selectedPrompt.value = null;
+    hiddenSelection.value = false;
+  }
   const selectionTarget = ref<"results" | "prompts">("results");
   const promptStatus = ref("");
   let promptGeneration = 0,
@@ -223,6 +243,11 @@ export const useProject = defineStore("project", () => {
       (geometry === "box" ? !obj.box : !(obj.mask || obj.polygons.length))
     )
       return;
+    if (!visibility.layerVisible(obj, geometry)) {
+      error.value =
+        "Show this layer in visibility controls before selecting it.";
+      return;
+    }
     tool.value = "select";
     selectionTarget.value = "results";
     selected.value = id;
@@ -270,6 +295,11 @@ export const useProject = defineStore("project", () => {
           prompt >= obj.points.length)
     )
       return;
+    if (!visibility.layerVisible(obj, "prompts")) {
+      error.value =
+        "Show this layer in visibility controls before selecting it.";
+      return;
+    }
     tool.value = "select";
     selectionTarget.value = "prompts";
     selected.value = id;
@@ -280,13 +310,7 @@ export const useProject = defineStore("project", () => {
     cancelInteractive();
     if (candidates.value) return; // Candidate mode owns its own regeneration.
     const obj = object.value;
-    if (
-      !obj ||
-      obj.locked ||
-      obj.hidden ||
-      annotation.value?.excluded ||
-      navigating.value
-    )
+    if (!obj || obj.locked || annotation.value?.excluded || navigating.value)
       return;
     if (!(obj.box || obj.prompt_box || obj.points.length)) return;
     promptStatus.value = "Waiting to update mask…";
@@ -306,7 +330,6 @@ export const useProject = defineStore("project", () => {
       !image ||
       !ann ||
       obj.locked ||
-      obj.hidden ||
       ann.excluded ||
       navigating.value
     )
@@ -326,7 +349,6 @@ export const useProject = defineStore("project", () => {
       current.value?.id === image.id &&
       version === editVersion &&
       !obj.locked &&
-      !obj.hidden &&
       !ann.excluded &&
       settings === JSON.stringify(parameters("segmentation")) &&
       !candidates.value;
@@ -513,7 +535,6 @@ export const useProject = defineStore("project", () => {
       !!(
         object.value &&
         !object.value.locked &&
-        !object.value.hidden &&
         !annotation.value?.excluded &&
         (object.value.box ||
           object.value.prompt_box ||
@@ -839,7 +860,6 @@ export const useProject = defineStore("project", () => {
         loaded.instances.some(
           (o) =>
             !o.locked &&
-            !o.hidden &&
             o.box &&
             !o.mask &&
             !o.polygons.length &&
@@ -946,6 +966,7 @@ export const useProject = defineStore("project", () => {
     } else defaultClass.value = id;
   }
   function deleteSelected() {
+    if (hiddenSelection.value) return;
     if (selectedPrompt.value !== null) deletePrompt();
     else if (selectedGeometry.value) removeGeometry(selectedGeometry.value);
     else remove();
@@ -988,6 +1009,7 @@ export const useProject = defineStore("project", () => {
     const ann = annotation.value;
     const obj = ann?.instances.find((o) => o.id === id);
     if (!ann || !obj || obj.locked || navigating.value) return;
+    if (!visibility.layerVisible(obj, prompt ? "prompts" : "box")) return;
     if (box.length !== 4 || !box.every(Number.isFinite)) return;
     const clipped = box.map((v, i) =>
       Math.max(0, Math.min(i % 2 ? ann.height : ann.width, v)),
@@ -1065,7 +1087,6 @@ export const useProject = defineStore("project", () => {
       !annotation.value.instances.some(
         (o) =>
           !o.locked &&
-          !o.hidden &&
           !o.mask &&
           !o.polygons.length &&
           (o.box || o.prompt_box || o.points.length),
@@ -1221,7 +1242,62 @@ export const useProject = defineStore("project", () => {
     ].find((entry) => entry.id === category.id);
     if (current) Object.assign(current, category);
   }
+  const creationLayer = computed<LayerKind | null>(() =>
+    tool.value === "box"
+      ? "box"
+      : ["promptbox", "positive", "negative", "text"].includes(tool.value)
+        ? "prompts"
+        : null,
+  );
+  const creationLayerBlocked = computed(() => {
+    const kind = creationLayer.value;
+    if (!kind) return "";
+    const obj = ["positive", "negative"].includes(tool.value)
+      ? object.value
+      : undefined;
+    return visibility.layerBlock(obj, kind);
+  });
+  function revealCreationLayer() {
+    const kind = creationLayer.value;
+    if (!kind) return;
+    visibility.setLayer("global", kind, true);
+    if (["positive", "negative"].includes(tool.value) && object.value) {
+      visibility.setLayer(object.value.id, kind, true);
+    }
+  }
+  watch(
+    () => [visibility.globalLayers.value, visibility.imageView.value],
+    () => {
+      hovered.value = null;
+      const obj = object.value;
+      if (!obj) return;
+      let clearedSelection = false;
+      if (
+        selectedGeometry.value &&
+        !visibility.layerVisible(obj, selectedGeometry.value)
+      ) {
+        selectedGeometry.value = null;
+        clearedSelection = true;
+      }
+      if (
+        selectedPrompt.value !== null &&
+        !visibility.layerVisible(obj, "prompts")
+      ) {
+        selectedPrompt.value = null;
+        clearedSelection = true;
+      }
+      // Keep the object context (and in-flight inference), but disarm geometry deletion.
+      if (clearedSelection && !selectedGeometry.value && selectedPrompt.value === null)
+        hiddenSelection.value = true;
+    },
+    { deep: true, flush: "sync" },
+  );
   return {
+    ...visibility,
+    selectObjectRow,
+    creationLayer,
+    creationLayerBlocked,
+    revealCreationLayer,
     candidates,
     candidate,
     candidateNotice,
