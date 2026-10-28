@@ -4,6 +4,7 @@ export function maskOutline(
   width: number,
   height: number,
   scale: number,
+  preview = false,
 ) {
   const output = new Uint8ClampedArray(width * height * 4);
   const edge: number[] = [];
@@ -50,6 +51,6 @@ export function maskOutline(
     }
   }
   paint(outer, [255, 255, 255]);
-  paint(inner, [49, 95, 233]);
+  paint(inner, preview ? [82, 104, 134] : [49, 95, 233]);
   return output;
 }

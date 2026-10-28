@@ -107,6 +107,7 @@ function submitTextPrompt() {
 const shortcuts = [
   ["Previous / next image", "A / D or ← / →"],
   ["Select", "V"],
+  ["Select SAM prompts", "Shift+V"],
   ["Detection box", "R"],
   ["Positive point", "Q"],
   ["Negative point", "E"],
@@ -300,7 +301,7 @@ function key(e: KeyboardEvent) {
     store.move(1);
   } else if (k === "v") {
     e.preventDefault();
-    store.activateSelection();
+    store.activateSelection(e.shiftKey ? "prompts" : "results");
   } else if (k === "c") {
     e.preventDefault();
     store.openClassPicker();
@@ -681,8 +682,9 @@ onBeforeUnmount(() => {
             <Icon name="select" />
           </button>
           <button
-            :title="t('Edit SAM prompts')"
-            :aria-label="t('Edit SAM prompts')"
+            :title="t('Select SAM prompts · Shift+V')"
+            aria-keyshortcuts="Shift+V"
+            :aria-label="t('Select SAM prompts')"
             :aria-pressed="
               store.tool === 'select' && store.selectionTarget === 'prompts'
             "

@@ -40,6 +40,7 @@ it.each(["en", "zh-CN"])(
       width: 10,
       height: 10,
     };
+    store.hovered = { id: obj.id, kind: "mask" };
     const app = createSSRApp(WorkspaceInspector);
     app.use(pinia);
     const html = await renderToString(app);
@@ -63,6 +64,12 @@ it.each(["en", "zh-CN"])(
           "新物体",
         ])
       expect(html).toContain(label);
+    expect(html).toMatch(
+      /class="(?=[^"]*inspector-object-row)(?=[^"]*hover-preview)[^"]*"/,
+    );
+    expect(html).toMatch(/data-column="mask"[^>]*class="hover-preview"/);
+    expect(html).not.toContain("Selected object properties");
+    expect(store.selected).toBeNull();
     expect(html).not.toContain('role="tablist"');
     expect(html).toContain(language === "en" ? "Image properties" : "图片属性");
     for (const column of [
@@ -273,4 +280,19 @@ it("starts collapsed even for a preselected object and keeps single clicks passi
   expect(state.expanded).toBeNull();
   expect(store.selected).toBe("a-object");
   expect(store.history).toHaveLength(0);
+});
+
+it("preserves an expanded selected row while preselecting another object", async () => {
+  const { store, state } = await mountedInspector();
+  state.disclosure("a-object");
+  state.query = "object";
+  await nextTick();
+  store.hovered = { id: "b-object", kind: "mask" };
+  await nextTick();
+  expect(store.selected).toBe("a-object");
+  expect(state.expanded).toBe("a-object");
+  expect(state.query).toBe("object");
+  store.hovered = null;
+  await nextTick();
+  expect(state.expanded).toBe("a-object");
 });

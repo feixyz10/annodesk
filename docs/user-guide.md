@@ -280,7 +280,7 @@ Moving, resizing, or editing a detection box keeps its associated mask and marks
 
 Creation tools have separate **Labels** and **SAM** groups. **Detection box** creates a saved annotation, drawn as a solid line in the class color. Positive/negative points, **SAM box prompt**, and text guide segmentation. Prompt boxes use amber dashes and are not exported as detection boxes.
 
-**Select** targets annotation results by default; prompt boxes and points cannot intercept box/mask selection. Choose **Edit SAM prompts** to select prompts. Geometry buttons in the right-hand instance list/details select a box, mask, or prompt explicitly even when they overlap completely. Only the selected target shows resize handles.
+**Select** targets annotation results by default; prompt boxes and points cannot intercept box/mask selection. Choose **Select SAM prompts** to select prompts. Geometry buttons in the right-hand instance list/details select a box, mask, or prompt explicitly even when they overlap completely. Only the selected target shows resize handles.
 
 For mask-only annotations, use **SAM box prompt** or positive/negative points. Prompt boxes and detection boxes are stored separately. Positive points include regions; negative points exclude them. The text tool requires a text-capable SAM 3 model and a default class.
 
@@ -424,6 +424,7 @@ Single-key shortcuts are suppressed inside inputs, class search, and IME composi
 | --- | --- |
 | Previous / next image | A / D or ← / → |
 | Select / detection box | V / R |
+| Select SAM prompts | Shift+V |
 | Positive / negative point | Q / E |
 | SAM box prompt / text prompt | B / T |
 | Start the next object | N |
@@ -579,6 +580,12 @@ Three buttons above object search act on the whole image:
 Image properties occupy the lower-right region. Drag the middle divider to adjust the split (55% by default, 25%–75% range); when focused, use ↑ / ↓, or double-click to reset. Both regions scroll independently. The properties button at the far right of the canvas toolbar toggles the inspector; narrow windows provide Image details.
 
 ### Selection, prompts, and box padding
+
+In Select mode, moving the pointer immediately previews the target with a slate outline and a matching Objects row/geometry highlight. Click to keep a selection; moving over another target does not replace it or expand details. Boxes respond near their borders, masks only on filled pixels (holes are excluded), and overlapping targets follow the same stacking order as clicks. SAM prompts respond only in the prompt selection scope. Hidden objects are skipped; locked objects can still be previewed and selected. Hover changes no annotations and clears when leaving the canvas, navigating, panning, changing tools/scope, or focusing a dialog.
+
+Box preselection uses the same white-backed slate solid border as masks; selected detection boxes use a white-backed blue solid border, with resize handles when editable. `Shift+V` selects SAM prompts; `V` returns to annotation results. These shortcuts are inactive while typing or using a modal.
+
+When a detection box and mask belong to the same instance, selecting either lightly outlines the other with a thinner, subdued edge. This does not select both: resize handles and Delete still act only on the explicitly selected geometry. SAM prompts and other instances are not linked by this highlight.
 
 Result selection and SAM prompt selection are separate. **V** restores ordinary selection, unless typing in an input. Tool cursors add badges to the arrow tip: a blue solid rectangle for detection boxes, amber corners with a plus for SAM prompt boxes, and plus/minus/T for points/text. Pan uses a hand; hold Space for temporary panning.
 

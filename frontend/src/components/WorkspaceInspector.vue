@@ -293,7 +293,10 @@ onBeforeUnmount(() => cleanup());
           >
             <div
               class="inspector-object-row"
-              :class="{ active: store.selected === object.id }"
+              :class="{
+                active: store.selected === object.id,
+                'hover-preview': store.hovered?.id === object.id,
+              }"
               @contextmenu.prevent="openMenu($event, object.id)"
             >
               <button
@@ -320,7 +323,12 @@ onBeforeUnmount(() => cleanup());
               <button
                 data-column="box"
                 :disabled="!object.box"
-                :class="{ 'missing-geometry': !object.box }"
+                :class="{
+                  'missing-geometry': !object.box,
+                  'hover-preview':
+                    store.hovered?.id === object.id &&
+                    store.hovered.kind === 'box',
+                }"
                 :title="t(object.box ? 'Detection box' : 'No detection box')"
                 :aria-label="
                   t(object.box ? 'Detection box' : 'No detection box')
@@ -342,6 +350,9 @@ onBeforeUnmount(() => cleanup());
                 :disabled="!(object.mask || object.polygons.length)"
                 :class="{
                   'missing-geometry': !(object.mask || object.polygons.length),
+                  'hover-preview':
+                    store.hovered?.id === object.id &&
+                    store.hovered.kind === 'mask',
                 }"
                 :title="
                   t(object.mask || object.polygons.length ? 'Mask' : 'No mask')
@@ -364,6 +375,9 @@ onBeforeUnmount(() => cleanup());
                 data-column="prompts"
                 :disabled="!(object.prompt_box || object.points.length)"
                 :class="{
+                  'hover-preview':
+                    store.hovered?.id === object.id &&
+                    ['point', 'prompt_box'].includes(store.hovered.kind),
                   'missing-geometry': !(
                     object.prompt_box || object.points.length
                   ),

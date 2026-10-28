@@ -1639,3 +1639,16 @@ button {
   min-height: 0;
   gap: 8px;
 }
+
+/* Canvas preselection stays distinct from the persistent blue selection. */
+.inspector-object-row.hover-preview {
+  border-color: #8293ac;
+  border-style: dashed;
+}
+.inspector-object-row.hover-preview:not(.active) {
+  background: #f0f3f7;
+}
+.inspector-object-row button.hover-preview:not([aria-pressed="true"]) {
+  background: #dfe6ef;
+  color: #354d6c;
+}

@@ -13,11 +13,18 @@ import {
   type MaskCandidates,
 } from "../api";
 
+export type HoverTarget = {
+  id: string;
+  kind: "box" | "mask" | "prompt_box" | "point";
+  index?: number;
+};
+
 export const useProject = defineStore("project", () => {
   const meta = ref<ProjectMeta | null>(null),
     images = ref<ImageItem[]>([]),
     current = ref<ImageItem | null>(null),
     annotation = ref<Annotation | null>(null);
+  const hovered = ref<HoverTarget | null>(null);
   const selected = ref<string | null>(null),
     defaultClass = ref<string | null>(null),
     classPickerOpen = ref(false),
@@ -1227,6 +1234,7 @@ export const useProject = defineStore("project", () => {
     current,
     annotation,
     selected,
+    hovered,
     defaultClass,
     classPickerOpen,
     openClassPicker,
