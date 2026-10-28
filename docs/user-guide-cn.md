@@ -2,7 +2,7 @@
 
 AnnoDesk 用于标注图像中的检测框和实例分割 mask，可导入已有 YOLO 检测标签，再根据框生成分割结果并人工复核。界面支持英文和简体中文，采用浅色主题，在浏览器中使用；图片、模型和标注数据保存在运行后端的电脑上。
 
-版本：0.3.1。
+版本：0.3.2。
 
 ## 1. 安装
 
@@ -27,13 +27,13 @@ Windows PowerShell 激活环境：
 使用本地发布包安装（离线环境需提前准备依赖）：
 
 ```sh
-python -m pip install ./annodesk-0.3.1-py3-none-any.whl
+python -m pip install ./annodesk-0.3.2-py3-none-any.whl
 ```
 
 版本上架 PyPI 后，也可通过包名安装：
 
 ```sh
-python -m pip install "annodesk==0.3.1"
+python -m pip install "annodesk==0.3.2"
 ```
 
 标准安装包含检测和分割共用的推理依赖（Ultralytics / PyTorch），不需要额外安装选项。安装后可检查环境：
@@ -49,7 +49,7 @@ annodesk doctor
 升级时先停止服务并备份整个项目，尤其是 `.annodesk/`，再执行：
 
 ```sh
-python -m pip install --upgrade ./annodesk-0.3.1-py3-none-any.whl
+python -m pip install --upgrade ./annodesk-0.3.2-py3-none-any.whl
 ```
 
 通过 PyPI 升级时使用相应包名及版本。升级后重启服务并刷新页面，已有标注保留原审核状态。

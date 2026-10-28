@@ -2,7 +2,7 @@
 
 AnnoDesk annotates detection boxes and instance masks in images. You can import existing YOLO detection labels, generate masks from boxes, and review the results manually. The browser interface supports English and Simplified Chinese with a light theme. Images, models, and annotations stay on the computer running the backend.
 
-Version: 0.3.1.
+Version: 0.3.2.
 
 ## 1. Installation
 
@@ -27,13 +27,13 @@ Or in Windows PowerShell:
 Install a local release package. For offline installation, prepare its dependencies beforehand:
 
 ```sh
-python -m pip install ./annodesk-0.3.1-py3-none-any.whl
+python -m pip install ./annodesk-0.3.2-py3-none-any.whl
 ```
 
 Once this version is available on PyPI, you can also install it by name:
 
 ```sh
-python -m pip install "annodesk==0.3.1"
+python -m pip install "annodesk==0.3.2"
 ```
 
 A standard installation includes the shared detection and segmentation dependencies, Ultralytics / PyTorch. No extra installation option is needed. Check the environment with:
@@ -49,7 +49,7 @@ Dependency installation may access a Python package index. Inference never downl
 Before upgrading, stop the service and back up the entire project, especially `.annodesk/`. Then run:
 
 ```sh
-python -m pip install --upgrade ./annodesk-0.3.1-py3-none-any.whl
+python -m pip install --upgrade ./annodesk-0.3.2-py3-none-any.whl
 ```
 
 For upgrades from PyPI, use the package name and appropriate version. Restart the service and refresh the page after upgrading. Existing annotations retain their review states.

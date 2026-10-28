@@ -44,7 +44,7 @@ weights remain external and resolve from the configured model root.
 Version 0.2.1 removes frontend build tooling from the user CLI, orders help by task,
 and keeps the shipped guide focused on installation, annotation and operation.
 
-The current release is **0.3.1**; see the [release notes](docs/releases/0.3.1.md) for changes, upgrade guidance and verification boundaries.
+The current release is **0.3.2**; see the [release notes](docs/releases/0.3.2.md) for changes, upgrade guidance and verification boundaries.
 
 Version 0.2.2 replaces the standalone `api` command with `serve --api-only`.
 
@@ -60,7 +60,7 @@ inference dependencies, while manual annotation remains available.
 The release regression suite covers journal recovery, first-read materialization,
 queued inference snapshots, cross-project and cross-image edits, category/tag draft
 rollback, batch/trash coordination, EXIF/TIFF coordinates and virtual-list bounds.
-The 0.3.1 regression check passed 239 Python tests and 170 frontend tests, Ruff,
+The 0.3.2 regression check passed 247 Python tests and 184 frontend tests, Ruff,
 the frontend build and an installed-wheel CLI/API/docs/static-resource smoke test.
 All eight user command help pages are checked without loading inference dependencies.
 Parameter help explains omitted/None values, configuration precedence, device plans and
@@ -140,7 +140,7 @@ Exports remain directory exports (no archive or browser upload/download of datas
 Tasks opens automatically when a task starts; closing it leaves a compact toolbar
 progress indicator without occupying canvas space. Logs is independent of an open project.
 
-Package and frontend metadata are aligned at 0.3.1. Releases use annotated Git tags;
+Package and frontend metadata are aligned at 0.3.2. Releases use annotated Git tags;
 commit messages describe changes without version numbers. Publishing is an explicit
 release step after checks and an outside-checkout wheel smoke test.
 
