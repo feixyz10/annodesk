@@ -47,6 +47,7 @@ const BatchSetup = defineAsyncComponent(
   () => import("./components/BatchSetup.vue"),
 );
 import TaskWindow from "./components/TaskWindow.vue";
+import MaskToBoxDialog from "./components/MaskToBoxDialog.vue";
 import ClearImageAnnotations from "./components/ClearImageAnnotations.vue";
 import ExportSetup from "./components/ExportSetup.vue";
 import WorkspaceInspector from "./components/WorkspaceInspector.vue";
@@ -118,7 +119,7 @@ const shortcuts = [
   ["Apply / cancel mask candidate", "Enter / Esc"],
   ["Switch candidates (candidate bar focused)", "← / →"],
   ["Class picker navigation", "↑ / ↓, Enter, Esc"],
-  ["Change selected annotation class", "C or double-click"],
+  ["Change selected annotation class", "C or double-click on canvas"],
   ["Delete selected geometry, prompt or object", "X or Delete or Backspace"],
   ["Delete whole object with all prompts", "Shift+X or Shift+Delete"],
   ["Cancel selection or close the active window", "Esc"],
@@ -962,7 +963,7 @@ onBeforeUnmount(() => {
                   "
                   :aria-label="t('Create missing boxes from masks')"
                   :title="t('Create missing boxes from masks')"
-                  @click="store.boxesFromMasks()"
+                  @click="store.boxConversion = 'image'"
                 >
                   <Icon name="box" />{{ t("Masks to boxes") }}
                 </button>
@@ -1083,6 +1084,7 @@ onBeforeUnmount(() => {
         >
       </NModal>
       <ClearImageAnnotations v-model:show="clearAnnotationsOpen" />
+      <MaskToBoxDialog />
       <ExportSetup v-model:show="exportOpen" @started="batchStarted" />
       <NModal
         v-model:show="openDialog"

@@ -28,7 +28,7 @@ export const useProject = defineStore("project", () => {
   const task = ref<"detection" | "segmentation">("segmentation"),
     tool = ref("select"),
     search = ref(""),
-    autoSegment = ref(true),
+    autoSegment = ref(false),
     autoDetect = ref(false),
     detectionModel = ref(""),
     model = ref("");
@@ -69,6 +69,7 @@ export const useProject = defineStore("project", () => {
     )
       detectionModel.value = meta.value.active_models.detection;
   }
+  const boxConversion = ref<"image" | "selected" | null>(null);
   const boxPadding = ref({
     box_padding_mode: "pixels" as "pixels" | "ratio",
     box_padding_pixels: 0,
@@ -830,7 +831,12 @@ export const useProject = defineStore("project", () => {
         models.value?.models.some((m) => m.id === model.value && m.available) &&
         loaded.instances.some(
           (o) =>
-            !o.locked && !o.hidden && o.box && !o.mask && !o.polygons.length,
+            !o.locked &&
+            !o.hidden &&
+            o.box &&
+            !o.mask &&
+            !o.polygons.length &&
+            !loaded.segmentation_blocked?.includes(o.id),
         )
       )
         void segment(true);
@@ -1120,24 +1126,40 @@ export const useProject = defineStore("project", () => {
     recalculate = false,
   ) {
     if (!annotation.value || !current.value) return;
+    if (selected && !object.value) return;
     cancelCandidates();
-    const generation = viewGeneration;
+    const generation = viewGeneration,
+      confirmedVersion = version,
+      confirmedAnnotation = annotation.value;
+    // Freeze scope and parameters before saving; later selection is not consent
+    // to recalculate a different instance (or every instance when deselected).
+    const body = JSON.parse(
+      JSON.stringify({
+        ...parameters(operation),
+        model: operation === "detection" ? detectionModel.value : "",
+        instance_id: selected ? selectedValue() : null,
+        recalculate_boxes: recalculate,
+      }),
+    );
     try {
       await save();
       if (generation !== viewGeneration || !current.value || !annotation.value)
         return;
+      if (
+        version !== confirmedVersion ||
+        annotation.value !== confirmedAnnotation
+      ) {
+        error.value =
+          "Annotations changed while saving. Run the operation again.";
+        return;
+      }
       const imageId = current.value!.id,
         projectId = meta.value?.id,
         captured = version;
       const updated = await request<Annotation>(
         `/images/${imageId}/${operation === "detection" ? "detect" : "boxes-from-masks"}`,
         "POST",
-        {
-          ...parameters(operation),
-          model: operation === "detection" ? detectionModel.value : "",
-          instance_id: selected ? selectedValue() : null,
-          recalculate_boxes: recalculate,
-        },
+        body,
       );
       if (
         generation !== viewGeneration ||
@@ -1242,6 +1264,7 @@ export const useProject = defineStore("project", () => {
     detectionModel,
     parameters,
     boxPadding,
+    boxConversion,
     refreshMeta,
     applyModel,
     refreshCurrent,

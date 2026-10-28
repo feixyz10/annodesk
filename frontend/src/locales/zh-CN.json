@@ -554,5 +554,10 @@
   "No valid annotations, not confirmed empty": "无有效标注且未确认无目标",
   "Unknown review state": "审核状态无法读取",
   "Check the image before confirming; approval stays separate.": "检查图片后再确认；审核通过需单独操作。",
-  "Skipped image details": "跳过图片明细"
+  "Skipped image details": "跳过图片明细",
+  "Boxes overlap existing unassociated masks. Select an object to refine explicitly.": "检测框与已有未关联掩膜重叠，请核对后选中实例进行细化。",
+  "Select object; double-click to toggle details": "选择实例；双击展开或收起详情",
+  "C or double-click on canvas": "C 或在画布上双击",
+  "Add boxes to unlocked masks without a detection box. Existing boxes are kept.": "为未锁定且缺少检测框的掩膜添加框，保留已有检测框。",
+  "Annotations changed while saving. Run the operation again.": "保存期间标注已改变，请重新执行操作。"
 }

@@ -13,6 +13,7 @@ from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from annodesk.associations import segmentation_blocked_ids
 from annodesk.candidates import CandidateApply, CandidateRequest, apply_candidate
 from annodesk.classes import compatible
 from annodesk.detector import inspect_classes
@@ -304,7 +305,12 @@ def project_routes(
         with item.lock:
             ann = item.annotation(image_id)
             width, height = item.image_size(image_id)
-            return {**ann.model_dump(), "width": width, "height": height}
+            return {
+                **ann.model_dump(),
+                "width": width,
+                "height": height,
+                "segmentation_blocked": sorted(segmentation_blocked_ids(ann.instances)),
+            }
 
     @router.put("/images/{image_id}/annotation")
     def save(image_id: str, body: Annotation):

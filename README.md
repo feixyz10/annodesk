@@ -169,9 +169,9 @@ Point and box prompts update the selected mask automatically after a short debou
 
 Mask-derived boxes support per-side pixel/ratio padding and the smaller of both, clipped to image bounds. UI uses percentages of mask bounds; CLI/API ratios use fractions (`--box-padding-ratio 0.1` = 10% per side). Defaults preserve tight bounds. Settings are available for current-image and batch geometry operations; no model is loaded. Undo/redo have a separate History tool group, and Edit SAM prompts directly enables prompt selection.
 
-Above object search, the inspector provides a contextual, undoable Clear image annotations confirmation (locked objects preserved unless explicitly included). Text prompts float over the canvas without reflow, tool cursors indicate interaction mode, and V restores result selection. Clicking the same object name toggles its inline details while keeping selection.
+Above object search, the inspector provides a contextual, undoable Clear image annotations confirmation (locked objects preserved unless explicitly included). Text prompts float over the canvas without reflow, tool cursors indicate interaction mode, and V restores result selection. Single-click selects an instance; double-click its name or click the chevron to toggle inline details while keeping selection.
 
-Annotation statistics now include saved box/mask totals and a class breakdown window (table or paginated horizontal bars). Geometry counts exclude discarded images by default; review totals always cover the project. The rebuildable index reads authoritative JSON or unmaterialized YOLO labels without loading pixels. Text prompts use a wider multiline overlay; drawing cursors keep the arrow hotspot and add distinct tool badges. Auto-segment defaults on for pending, non-excluded images with available models and eligible missing masks.
+Annotation statistics now include saved box/mask totals and a class breakdown window (table or paginated horizontal bars). Geometry counts exclude discarded images by default; review totals always cover the project. The rebuildable index reads authoritative JSON or unmaterialized YOLO labels without loading pixels. Text prompts use a wider multiline overlay; drawing cursors keep the arrow hotspot and add distinct tool badges. Auto-segment defaults off; when enabled, it processes pending, non-excluded images with available models and eligible missing masks.
 
 The workbench Batch dialog can start directly: Start saves current edits and runs scope/model compatibility checks before submitting a job. Preview scope is optional; an empty scope is reported without creating a job. Task polling preserves completed jobs and statistics during same-session metadata refreshes.
 
@@ -192,3 +192,7 @@ Export summaries group images by four review states and show a nested
 Skipped-file details have their own bounded scroll area. The API includes
 `skipped_by_state` and `skipped_no_valid_annotations`; unknown review states are
 reported separately. Full user workflows and shortcuts are in the shipped guide.
+
+Initial imports of both YOLO projections pair same-class boxes and masks only for unique overlapping candidates with bounding-box IoU >= 0.9, independent of row order. Unresolved same-class mask overlaps block automatic/batch mask completion; explicit instance refinement remains available. Existing internal records are preserved, including IDs and manual edits.
+
+Instance rows use single-click to select and double-click on the name or click the chevron to expand details. Mask-to-box actions open a shared padding dialog before execution (pixels, ratio, or per-axis minimum); image-wide conversion keeps existing boxes. Auto-segment and Auto-detect both start off; prompt-based interactive refinement remains automatic.

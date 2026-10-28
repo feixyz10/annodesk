@@ -102,7 +102,9 @@ labels_seg/train/camera_a/001.txt
 
 Images need not have labels yet. AnnoDesk creates `data.yaml` if it is missing. Existing labels without class names receive placeholder names such as `class_0`. You can also open an image directory directly; labels and `.annodesk/` will be written inside it, so a dedicated working directory is recommended.
 
-Files such as `001.jpg` and `001.png` in the same directory would share one label filename and must be renamed first. Imported detection and segmentation labels currently create separate instances; they are not automatically matched or merged.
+Files such as `001.jpg` and `001.png` in the same directory would share one label filename and must be renamed first. When both `labels` and `labels_seg` exist, the first import pairs a box and a mask only if they have the same class, each has exactly one overlapping candidate, and their bounding-box IoU is at least 0.9. File row order is irrelevant. Other instances remain separate; masks alone never create detection boxes.
+
+A box overlapping an unassociated mask of the same class is skipped by Auto-segment, missing-mask completion and batch/CLI segmentation. Non-overlapping missing boxes can still be processed. Inspect ambiguous objects and select an instance explicitly to refine it. Existing internal records keep their IDs and edits; opening them does not merge instances or delete masks already duplicated by an earlier version.
 
 YOLO box values must be within `[0,1]`, and the converted box must have positive area and stay inside the image. Invalid imports report the label file and line number without creating an internal annotation. Only tiny floating-point rounding errors at the boundary are tolerated. Correct the source TXT file and reopen the image. Detection export also rejects out-of-bounds boxes in older internal records.
 
@@ -282,7 +284,7 @@ Creation tools have separate **Labels** and **SAM** groups. **Detection box** cr
 
 For mask-only annotations, use **SAM box prompt** or positive/negative points. Prompt boxes and detection boxes are stored separately. Positive points include regions; negative points exclude them. The text tool requires a text-capable SAM 3 model and a default class.
 
-**Auto-segment** defaults on. When entering a non-excluded image with segmentation Not reviewed and eligible boxes, it fills missing masks for visible, unlocked boxes. Existing masks are preserved. A locally available segmentation model and dependencies are required; otherwise no automatic request is dispatched. In Detection, **Detect current** and **Auto-detect** are available. Auto-detect defaults off and only processes non-excluded, Not reviewed images with no instances.
+**Auto-segment** defaults off. Enable it in the toolbar for the current page session. This switch controls processing on navigation; drawing SAM prompts still updates the selected mask interactively. When entering a non-excluded image with segmentation Not reviewed and eligible boxes, it fills missing masks for visible, unlocked boxes. Existing masks are preserved. A locally available segmentation model and dependencies are required; otherwise no automatic request is dispatched. In Detection, **Detect current** and **Auto-detect** are available. Auto-detect defaults off and only processes non-excluded, Not reviewed images with no instances.
 
 **Batch…** offers Detect boxes, Segment existing boxes, or Boxes from masks for all project images or the current search results. Only Not reviewed is selected by default; Needs review / Approved can be explicitly included. Excluded images are always skipped. Detection and mask-to-box operations use Detection review; SAM uses Segmentation review.
 
@@ -430,7 +432,7 @@ Single-key shortcuts are suppressed inside inputs, class search, and IME composi
 | Preview text segmentation | Ctrl+Enter or ⌘Enter |
 | Apply / cancel candidates | Enter / Esc |
 | Switch candidates | ← / → with the candidate strip focused |
-| Change class | C or double-click an instance |
+| Change class | C or double-click an instance on the canvas |
 | Navigate the class picker | ↑ / ↓, Enter, Esc |
 | Delete selected geometry, prompt, or instance | X or Delete or Backspace |
 | Delete the whole instance and its prompts | Shift+X or Shift+Delete |
@@ -564,7 +566,7 @@ Both English (`user-guide.md`) and Simplified Chinese (`user-guide-cn.md`) guide
 
 ### Instance list and image properties
 
-The canvas has a single top toolbar for model settings, current-image processing, automatic processing, pan, zoom, and Fit. The upper-right instance list has fixed columns for box, mask, SAM prompts, visibility, lock, and more. Missing geometry keeps a disabled gray slot. The Objects region stays open; each instance's details start collapsed. Clicking its name toggles details while retaining selection. Clicking a geometry icon selects that target and expands details. Visibility/lock controls do not change selection.
+The canvas has a single top toolbar for model settings, current-image processing, automatic processing, pan, zoom, and Fit. The upper-right instance list has fixed columns for box, mask, SAM prompts, visibility, lock, and more. Missing geometry keeps a disabled gray slot. The Objects region stays open; each instance's details start collapsed. Single-clicking a name or geometry icon only selects it. Double-click the name or use the chevron to expand/collapse details without changing selection. Selecting another instance closes the previous details without opening the new one. Visibility/lock controls do not change selection.
 
 Expanded details provide searchable class assignment, mask refinement, candidates, prompt clearing, mask-to-box conversion, prompt details, and box coordinates. Individual points or prompt boxes can be selected through prompt details. More and right-click open the same menu. Locked instances cannot be directly modified or deleted. Metadata/statistics refreshes preserve zoom, pan, instance search, and expanded details.
 
@@ -572,7 +574,7 @@ Three buttons above object search act on the whole image:
 
 - **Clear labels…** confirms deletion of instances and their boxes, masks, and prompts. Locked instances are retained unless explicitly included. One undo restores the operation. Tags, notes, project classes, and exclusion remain; both task review states return to Not reviewed and empty confirmations are cleared.
 - **Clear prompts** removes unlocked points/prompt boxes while retaining masks and detection boxes. It supports undo and does not trigger segmentation.
-- **Masks to boxes** adds missing detection boxes to unlocked instances and preserves existing boxes.
+- **Masks to boxes** opens the padding settings window before adding missing detection boxes to unlocked instances. Existing boxes are preserved. Single-instance Create/Recalculate and the context menu open the same settings. Choose pixels per side or a percentage of the mask bounding box width/height; **min** uses the smaller of the two on each axis. Results are clipped to image bounds. Zero produces a tight box. Settings are shared with batch processing for this page session. Confirmation freezes the target and padding; selection changes during saving do not redirect the operation. New annotation edits during saving require running it again.
 
 Image properties occupy the lower-right region. Drag the middle divider to adjust the split (55% by default, 25%–75% range); when focused, use ↑ / ↓, or double-click to reset. Both regions scroll independently. The properties button at the far right of the canvas toolbar toggles the inspector; narrow windows provide Image details.
 
@@ -584,7 +586,7 @@ Text prompts float inside the canvas without resizing it. The input defaults to 
 
 When deriving boxes from masks, set per-side padding in pixels or as a proportion of the tight mask bounds' width/height. With **min** checked, each axis uses the smaller of its pixel and proportional padding. Results are clipped to image boundaries. Padding defaults to zero. The UI uses percentages; CLI/API use fractions, so `--box-padding-ratio 0.1` means 10% on each side. CLI options are `--box-padding-mode pixels|ratio`, `--box-padding-pixels`, `--box-padding-ratio`, and `--box-padding-min`. Instance, current-image, and batch geometry operations share session settings; launched tasks retain their parameter snapshot.
 
-**Auto-segment** defaults on and fills eligible missing masks for non-excluded, segmentation-unreviewed images when a model is available. It preserves existing masks. **Auto-detect** defaults off.
+**Auto-segment** defaults off; when enabled, it fills eligible missing masks for non-excluded, segmentation-unreviewed images when a model is available. It preserves existing masks. **Auto-detect** defaults off.
 
 ### Review and statistics
 

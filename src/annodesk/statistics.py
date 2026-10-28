@@ -8,6 +8,9 @@ import threading
 from collections import defaultdict
 from contextlib import closing
 
+from annodesk.associations import merge_imported_instances
+from annodesk.domain import Instance
+
 
 class StatisticsIndex:
     def __init__(self, project):
@@ -64,13 +67,17 @@ class StatisticsIndex:
                     ):
                         raise ValueError("Box outside image")
                 instances.append(
-                    {
-                        "class_id": category,
-                        "polygons": [coords] if segmentation else [],
-                        "box": None if segmentation else coords,
-                    }
+                    Instance(
+                        class_id=category,
+                        polygons=[[[coords[i], coords[i + 1]] for i in range(0, len(coords), 2)]]
+                        if segmentation
+                        else [],
+                        box=None
+                        if segmentation
+                        else [x - width / 2, y - height / 2, x + width / 2, y + height / 2],
+                    )
                 )
-        return {"instances": instances}
+        return {"instances": [obj.model_dump() for obj in merge_imported_instances(instances)]}
 
     @staticmethod
     def _counts(record):
@@ -121,7 +128,7 @@ class StatisticsIndex:
                             self._stamp(self.project.label_path(image_id, seg))
                             for seg in (False, True)
                         ]
-                        + [mapping]
+                        + [mapping, "import-associations-v1"]
                     )
                 )
                 if known.get(image_id) == stamp and known_counts.get(image_id) == geometry_stamp:

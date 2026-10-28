@@ -160,9 +160,17 @@ async function mountedInspector(initialSelected: string | null = null) {
   await nextTick();
   return { store, state: vm.$.setupState };
 }
-it("expands only the selected row, preserves selection on collapse and keeps toggles independent", async () => {
+it("selects without opening details and expands only through explicit disclosure", async () => {
   const { store, state } = await mountedInspector();
   state.select("a-object");
+  await nextTick();
+  expect(store.selected).toBe("a-object");
+  expect(state.expanded).toBeNull();
+  state.disclosure("a-object");
+  await nextTick();
+  expect(state.expanded).toBe("a-object");
+  state.select("a-object");
+  state.geometry("a-object", "box");
   await nextTick();
   expect(state.expanded).toBe("a-object");
   state.disclosure("a-object");
@@ -170,12 +178,11 @@ it("expands only the selected row, preserves selection on collapse and keeps tog
   expect(store.selected).toBe("a-object");
   state.geometry("b-object", "mask");
   await nextTick();
-  expect(state.expanded).toBe("b-object");
+  expect(state.expanded).toBeNull();
   expect(store.selectedGeometry).toBe("mask");
   state.toggle("a-object", "hidden");
   state.toggle("a-object", "locked");
   expect(store.selected).toBe("b-object");
-  expect(store.selectedGeometry).toBe("mask");
   expect(store.annotation!.instances[0]).toMatchObject({
     hidden: true,
     locked: true,
@@ -183,7 +190,7 @@ it("expands only the selected row, preserves selection on collapse and keeps tog
 });
 it("preserves object search and expanded properties on metadata refresh", async () => {
   const { store, state } = await mountedInspector();
-  state.select("a-object");
+  state.disclosure("a-object");
   state.query = "a";
   await nextTick();
   store.meta = { ...store.meta!, image_count: 3 };
@@ -237,33 +244,33 @@ it("retains all geometry slots even for a prompt-only object", async () => {
   expect(html.match(/data-column=/g)).toHaveLength(6);
 });
 
-it("toggles an already-selected row without losing its selected geometry", async () => {
+it("closes old details when selecting another instance, including from the canvas", async () => {
   const { store, state } = await mountedInspector();
-  state.geometry("b-object", "mask");
-  await nextTick();
-  state.select("b-object");
-  await nextTick();
-  expect(state.expanded).toBeNull();
-  expect(store.selected).toBe("b-object");
-  expect(store.selectedGeometry).toBe("mask");
-  state.select("b-object");
+  state.disclosure("b-object");
   await nextTick();
   expect(state.expanded).toBe("b-object");
   state.geometry("a-object", "box");
   await nextTick();
-  expect(state.expanded).toBe("a-object");
+  expect(state.expanded).toBeNull();
+  state.disclosure("a-object");
+  await nextTick();
+  store.selected = "b-object";
+  await nextTick();
+  expect(state.expanded).toBeNull();
 });
-
-it("starts object details collapsed even when an object is already selected", async () => {
+it("starts collapsed even for a preselected object and keeps single clicks passive", async () => {
   const { store, state } = await mountedInspector("a-object");
   expect(state.objects).toHaveLength(2);
-  expect(state.expanded).toBeNull();
-  expect(store.selected).toBe("a-object");
   state.select("a-object");
+  await nextTick();
+  expect(state.expanded).toBeNull();
+  state.disclosure("a-object"); // Name double-click and triangle share this handler.
   await nextTick();
   expect(state.expanded).toBe("a-object");
   state.select("a-object");
+  state.disclosure("a-object");
   await nextTick();
   expect(state.expanded).toBeNull();
+  expect(store.selected).toBe("a-object");
   expect(store.history).toHaveLength(0);
 });

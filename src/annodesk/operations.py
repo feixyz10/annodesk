@@ -4,6 +4,7 @@ import math
 
 import numpy as np
 
+from annodesk.associations import segmentation_blocked_ids
 from annodesk.classes import class_names, compatible
 from annodesk.colors import choose_color
 from annodesk.domain import Instance, uid
@@ -27,8 +28,10 @@ def eligible(annotation, body):
             not o.locked and (o.mask or o.polygons) and (not o.box or body.recalculate_boxes)
             for o in annotation.instances
         )
+    blocked = segmentation_blocked_ids(annotation.instances)
     return any(
-        o.box and not o.mask and not o.polygons and not o.locked for o in annotation.instances
+        o.box and not o.mask and not o.polygons and not o.locked and o.id not in blocked
+        for o in annotation.instances
     )
 
 

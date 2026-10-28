@@ -62,7 +62,7 @@ watch(
   () => [store.selected, store.selectedGeometry, store.selectedPrompt],
   () => {
     menu.value = null;
-    expanded.value = store.selected;
+    if (expanded.value !== store.selected) expanded.value = null;
     void reveal();
   },
 );
@@ -79,15 +79,11 @@ watch(query, () => {
   if (list.value) list.value.scrollTop = 0;
 });
 function select(id: string) {
-  if (store.selected === id) {
-    expanded.value = expanded.value === id ? null : id;
-    if (expanded.value) void reveal();
-    return;
-  }
+  if (store.selected === id) return;
   store.selected = id;
   store.selectedGeometry = null;
   store.selectedPrompt = null;
-  expanded.value = id;
+  if (expanded.value !== id) expanded.value = null;
   void reveal();
 }
 function geometry(id: string, kind: "box" | "mask" | "prompts") {
@@ -95,7 +91,7 @@ function geometry(id: string, kind: "box" | "mask" | "prompts") {
     const obj = store.annotation?.instances.find((o) => o.id === id);
     if (obj) store.selectPrompt(id, obj.prompt_box ? "box" : 0);
   } else store.selectGeometry(id, kind);
-  expanded.value = id;
+  if (expanded.value !== id) expanded.value = null;
   void reveal();
 }
 function toggle(id: string, key: "hidden" | "locked") {
@@ -111,6 +107,7 @@ function disclosure(id: string) {
   else {
     if (store.selected !== id) select(id);
     expanded.value = id;
+    void reveal();
   }
 }
 async function openMenu(event: MouseEvent, id: string) {
@@ -203,7 +200,7 @@ function menuAction(key: string) {
   if (key === "class") store.openClassPicker();
   else if (key === "refine") void store.segment();
   else if (key === "candidates") void store.generateCandidates();
-  else if (key === "box") void store.boxesFromMasks(true, !!store.object?.box);
+  else if (key === "box") store.boxConversion = "selected";
   else if (key === "clear") store.deletePrompt(true);
   else if (key === "delete-box") store.removeGeometry("box");
   else if (key === "delete-mask") store.removeGeometry("mask");
@@ -301,9 +298,10 @@ onBeforeUnmount(() => cleanup());
             >
               <button
                 class="object-name"
-                :title="name(object.class_id)"
+                :title="t('Select object; double-click to toggle details')"
                 :aria-pressed="store.selected === object.id"
                 @click="select(object.id)"
+                @dblclick="disclosure(object.id)"
               >
                 <small class="object-index">{{
                   (store.annotation?.instances.findIndex(

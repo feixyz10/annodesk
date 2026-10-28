@@ -9,6 +9,7 @@ from typing import Literal
 import numpy as np
 from pydantic import BaseModel, Field
 
+from annodesk.associations import segmentation_blocked_ids
 from annodesk.devices import DeviceType
 from annodesk.domain import Annotation, Instance
 from annodesk.images import inference_image
@@ -370,6 +371,11 @@ def compute_annotation(
         return compute_boxes(path, size, annotation, body, adapter)
     if annotation.excluded:
         raise ValueError("Image is excluded")
+    blocked = (
+        segmentation_blocked_ids(annotation.instances)
+        if not body.instance_id and not body.text
+        else set()
+    )
     targets = (
         [o for o in annotation.instances if o.id == body.instance_id]
         if body.instance_id
@@ -380,12 +386,17 @@ def compute_annotation(
             and not o.mask
             and not o.polygons
             and not o.locked
+            and o.id not in blocked
         ]
     )
     if body.text:
         if body.class_id is None:
             raise ValueError("Choose a class before text segmentation")
         targets = [Instance(class_id=body.class_id)]
+    if not targets and blocked:
+        raise ValueError(
+            "Boxes overlap existing unassociated masks. Select an object to refine explicitly."
+        )
     if not targets or (
         not body.text and any(not (o.box or o.prompt_box or o.points) for o in targets)
     ):

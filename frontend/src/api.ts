@@ -79,6 +79,7 @@ export interface Instance {
   box_source?: string;
 }
 export interface Annotation {
+  segmentation_blocked?: string[];
   revision: number;
   instances: Instance[];
   detection_review: "pending" | "ok" | "uncertain";

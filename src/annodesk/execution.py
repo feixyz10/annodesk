@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from annodesk.associations import segmentation_blocked_ids
 from annodesk.devices import DevicePlan
 from annodesk.domain import Annotation
 from annodesk.inference import SegmentRequest, UltralyticsAdapter, compute_annotation
@@ -21,8 +22,10 @@ class StartupError(ValueError):
 
 
 def eligible(annotation):
+    blocked = segmentation_blocked_ids(annotation.instances)
     return not annotation.excluded and any(
-        o.box and not o.mask and not o.polygons and not o.locked for o in annotation.instances
+        o.box and not o.mask and not o.polygons and not o.locked and o.id not in blocked
+        for o in annotation.instances
     )
 
 

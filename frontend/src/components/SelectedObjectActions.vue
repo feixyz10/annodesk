@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { NSelect } from "naive-ui";
-import BoxPaddingControls from "./BoxPaddingControls.vue";
 import { t, toolLabel } from "../i18n";
 import { useProject } from "../stores/project";
 const store = useProject();
@@ -176,18 +175,15 @@ function editCoordinate(event: Event, index: number) {
         <template v-if="store.object.mask || store.object.polygons.length"
           ><button
             :disabled="blocked"
-            @click="store.boxesFromMasks(true, !!store.object.box)"
+            @click="store.boxConversion = 'selected'"
           >
             {{
               store.object.box
                 ? t("Recalculate box from mask")
                 : t("Create box from mask")
             }}
-          </button>
-          <details class="box-padding-settings">
-            <summary>{{ t("Mask to box padding") }}</summary>
-            <BoxPaddingControls :disabled="blocked" /></details
-        ></template>
+          </button></template
+        >
       </div>
       <div class="property-section property-danger">
         <button

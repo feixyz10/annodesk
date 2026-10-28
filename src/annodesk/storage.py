@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+from annodesk.associations import merge_imported_instances
 from annodesk.colors import choose_color
 from annodesk.domain import Annotation, Instance, uid
 from annodesk.images import raster_size
@@ -226,6 +227,7 @@ class Project:
                             )
                     except (ValueError, KeyError) as error:
                         raise ValueError(f"{label}:{number}: {error}") from error
+            ann.instances = merge_imported_instances(ann.instances)
             # Materialize a stable initial revision without rewriting imported YOLO files.
             if materialize:
                 return self._write_initial(image_id, ann)

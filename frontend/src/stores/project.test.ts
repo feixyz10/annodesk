@@ -399,6 +399,66 @@ describe("assisted annotation", () => {
     expect(s.current?.id).toBe("b");
     expect(s.annotation!.instances).toHaveLength(1);
   });
+  it.each([null, "other"])(
+    "freezes confirmed box scope and padding across save (selection=%s)",
+    async (selection) => {
+      const s = initialized(),
+        pending = deferred<Annotation>();
+      const target = s.annotation!.instances[0];
+      target.polygons = [
+        [
+          [1, 1],
+          [8, 1],
+          [8, 8],
+        ],
+      ];
+      s.annotation!.instances.push({
+        ...instance("c", [0, 0, 9, 9]),
+        id: "other",
+      });
+      s.selected = target.id;
+      s.boxPadding.box_padding_pixels = 12;
+      s.changed();
+      mock.mockImplementation(async (_path, method) =>
+        method === "PUT" ? pending.promise : { ...s.annotation!, revision: 2 },
+      );
+      const run = s.boxesFromMasks(true, true);
+      s.selected = selection;
+      s.boxPadding.box_padding_pixels = 30;
+      pending.resolve({ ...s.annotation!, revision: 1 });
+      await run;
+      const sent = mock.mock.calls.find(([path]) =>
+        path.endsWith("/boxes-from-masks"),
+      );
+      expect(sent?.[2]).toMatchObject({
+        instance_id: target.id,
+        box_padding_pixels: 12,
+        recalculate_boxes: true,
+      });
+    },
+  );
+  it("rejects a box conversion if new edits arrive while saving", async () => {
+    const s = initialized(),
+      pending = deferred<Annotation>();
+    s.selected = s.annotation!.instances[0].id;
+    s.changed();
+    mock.mockImplementation(async () => pending.promise);
+    const run = s.boxesFromMasks(true, true);
+    s.annotation!.notes = "new edits";
+    s.changed();
+    pending.resolve({ ...s.annotation!, revision: 1 });
+    await run;
+    expect(
+      mock.mock.calls.some(([path]) => path.endsWith("/boxes-from-masks")),
+    ).toBe(false);
+    expect(s.error).toContain("changed while saving");
+  });
+  it("never treats a missing selected instance as permission to process the image", async () => {
+    const s = initialized();
+    s.selected = null;
+    await s.boxesFromMasks(true, true);
+    expect(mock).not.toHaveBeenCalled();
+  });
   it("preserves local edits made during mask-to-box processing", async () => {
     const s = initialized(),
       pending = deferred<Annotation>();
@@ -1124,40 +1184,12 @@ it("discards a late model result after image annotations are cleared", async () 
   expect(s.annotation!.instances).toHaveLength(0);
 });
 
-it("enables auto segmentation by default and fills only pending visible unlocked boxes", async () => {
-  const s = initialized();
-  expect(s.autoSegment).toBe(true);
-  s.model = "sam";
-  s.models = {
-    config: "test",
-    default_model: "sam",
-    models: [
-      {
-        id: "sam",
-        name: "SAM",
-        backend: "sam2",
-        available: true,
-        path: "/tmp/model",
-        error: null,
-        text_prompts: false,
-      },
-    ],
-  };
-  const target = ann();
-  target.segmentation_review = "pending";
-  mock.mockImplementation(async (path) =>
-    path.endsWith("/segment") ? { ...target, revision: 1 } : target,
-  );
-  await s.load(s.images[1]);
-  for (let i = 0; i < 10; i++) await Promise.resolve();
-  expect(mock.mock.calls.some(([path]) => path.endsWith("/segment"))).toBe(
-    true,
-  );
-});
-it.each(["excluded", "reviewed", "locked", "hidden", "missing-model"])(
-  "does not auto-segment %s images/objects",
-  async (reason) => {
+it.each([false, true])(
+  "auto segmentation requires opt-in (enabled=%s)",
+  async (enabled) => {
     const s = initialized();
+    expect(s.autoSegment).toBe(false);
+    s.autoSegment = enabled;
     s.model = "sam";
     s.models = {
       config: "test",
@@ -1167,26 +1199,65 @@ it.each(["excluded", "reviewed", "locked", "hidden", "missing-model"])(
           id: "sam",
           name: "SAM",
           backend: "sam2",
-          available: reason !== "missing-model",
-          path: null,
+          available: true,
+          path: "/tmp/model",
           error: null,
           text_prompts: false,
         },
       ],
     };
     const target = ann();
-    target.segmentation_review = reason === "reviewed" ? "ok" : "pending";
-    target.excluded = reason === "excluded";
-    target.instances[0].locked = reason === "locked";
-    target.instances[0].hidden = reason === "hidden";
-    mock.mockResolvedValue(target);
+    target.segmentation_review = "pending";
+    mock.mockImplementation(async (path) =>
+      path.endsWith("/segment") ? { ...target, revision: 1 } : target,
+    );
     await s.load(s.images[1]);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(mock.mock.calls.some(([path]) => path.endsWith("/segment"))).toBe(
-      false,
+      enabled,
     );
   },
 );
+it.each([
+  "excluded",
+  "reviewed",
+  "locked",
+  "hidden",
+  "missing-model",
+  "unassociated-mask",
+])("does not auto-segment %s images/objects", async (reason) => {
+  const s = initialized();
+  s.autoSegment = true;
+  s.model = "sam";
+  s.models = {
+    config: "test",
+    default_model: "sam",
+    models: [
+      {
+        id: "sam",
+        name: "SAM",
+        backend: "sam2",
+        available: reason !== "missing-model",
+        path: null,
+        error: null,
+        text_prompts: false,
+      },
+    ],
+  };
+  const target = ann();
+  target.segmentation_review = reason === "reviewed" ? "ok" : "pending";
+  target.excluded = reason === "excluded";
+  target.instances[0].locked = reason === "locked";
+  target.instances[0].hidden = reason === "hidden";
+  if (reason === "unassociated-mask")
+    target.segmentation_blocked = [target.instances[0].id];
+  mock.mockResolvedValue(target);
+  await s.load(s.images[1]);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  expect(mock.mock.calls.some(([path]) => path.endsWith("/segment"))).toBe(
+    false,
+  );
+});
 
 it("requires explicit empty confirmation for approval but permits needs-review and exclusion", () => {
   const s = initialized();
