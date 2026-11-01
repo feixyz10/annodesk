@@ -12,6 +12,7 @@ This README is for repository development.
 ## Design and implementation scope
 
 The complete target design is in [docs/specs/annodesk.md](docs/specs/annodesk.md).
+Version 0.5.0 adds [manual mask editing](docs/specs/manual-masks.md): brushes, erasers, polygon additions/subtractions and protection against implicit SAM replacement.
 Version 0.2.0 adds offline YOLO detection preannotation, strict detector/project class
 validation, lazy transactional class creation, mask-to-box geometry, review-aware batch
 scopes, and central Models/Tasks windows. See the [assisted annotation specification](docs/specs/assisted-boxes.md).
@@ -44,7 +45,7 @@ weights remain external and resolve from the configured model root.
 Version 0.2.1 removes frontend build tooling from the user CLI, orders help by task,
 and keeps the shipped guide focused on installation, annotation and operation.
 
-The current release is **0.4.0**; see the [release notes](docs/releases/0.4.0.md) for changes, upgrade guidance and verification boundaries.
+The current release is **0.5.0**; see the [release notes](docs/releases/0.5.0.md) for changes, upgrade guidance and verification boundaries.
 
 Version 0.2.2 replaces the standalone `api` command with `serve --api-only`.
 
@@ -141,7 +142,7 @@ Exports remain directory exports (no archive or browser upload/download of datas
 Tasks opens automatically when a task starts; closing it leaves a compact toolbar
 progress indicator without occupying canvas space. Logs is independent of an open project.
 
-Package and frontend metadata are aligned at 0.4.0. Releases use annotated Git tags;
+Package and frontend metadata are aligned at 0.5.0. Releases use annotated Git tags;
 commit messages describe changes without version numbers. Publishing is an explicit
 release step after checks and an outside-checkout wheel smoke test.
 

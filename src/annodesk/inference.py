@@ -386,6 +386,7 @@ def compute_annotation(
             and not o.mask
             and not o.polygons
             and not o.locked
+            and not o.mask_manually_edited
             and o.id not in blocked
         ]
     )
@@ -402,6 +403,10 @@ def compute_annotation(
     ):
         raise ValueError("Select an object with points or a box prompt")
     for target in targets:
+        if target.mask_manually_edited:
+            raise ValueError(
+                "Manual edits protected; use a mask preview and explicitly apply replacement"
+            )
         if target.locked:
             raise ValueError("Object is locked")
         masks = adapter.predict(

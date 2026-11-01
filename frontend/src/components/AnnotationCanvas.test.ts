@@ -5,7 +5,11 @@ import { instance } from "../api";
 import { useProject } from "../stores/project";
 import AnnotationCanvas from "./AnnotationCanvas.vue";
 
-const graph = vi.hoisted(() => ({ layers: [] as any[], stages: [] as any[] }));
+const graph = vi.hoisted(() => ({
+  layers: [] as any[],
+  stages: [] as any[],
+  hosts: [] as any[],
+}));
 vi.mock("konva", () => {
   class Node {
     children: Node[] = [];
@@ -44,8 +48,9 @@ vi.mock("konva", () => {
     on(events: string, handler: (...args: any[]) => void) {
       for (const event of events.split(" ")) this.handlers[event] = handler;
     }
-    draggable(value: boolean) {
-      this.attrs.draggable = value;
+    draggable(value?: boolean) {
+      if (value !== undefined) this.attrs.draggable = value;
+      return this.attrs.draggable;
     }
     batchDraw() {}
     width() {
@@ -99,7 +104,22 @@ class ImageRequest {
   async decode() {}
 }
 const renderer = createRenderer<any, any>({
-  createElement: () => ({ clientWidth: 640, clientHeight: 480 }),
+  createElement: () => {
+    const handlers: Record<string, Function> = {};
+    const host = {
+      focus: vi.fn(),
+      clientWidth: 640,
+      clientHeight: 480,
+      handlers,
+      addEventListener: (name: string, fn: Function) => (handlers[name] = fn),
+      removeEventListener: (name: string) => delete handlers[name],
+      getBoundingClientRect: () => ({ left: 0, top: 0 }),
+      setPointerCapture() {},
+      hasPointerCapture: () => false,
+    };
+    graph.hosts.push(host);
+    return host;
+  },
   insert() {},
   remove() {},
   patchProp() {},
@@ -111,6 +131,7 @@ const renderer = createRenderer<any, any>({
   nextSibling: () => null,
 });
 let dispose = () => {};
+let canvasApi: any;
 let frames = new Map<number, FrameRequestCallback>();
 let frameId = 0;
 function frame() {
@@ -136,9 +157,11 @@ async function mountedCanvas() {
   vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
   graph.layers = [];
   graph.stages = [];
+  graph.hosts = [];
   ImageRequest.requests = [];
   vi.stubGlobal("Image", ImageRequest);
   vi.stubGlobal("document", {
+    querySelector: () => null,
     createElement: () => ({
       getContext: () => ({
         drawImage: vi.fn(),
@@ -193,7 +216,14 @@ async function mountedCanvas() {
     ...AnnotationCanvas,
     render: () => h("div", { ref: "host" }),
   };
-  const app = renderer.createApp({ render: () => h(canvas) });
+  const app = renderer.createApp({
+    render: () =>
+      h(canvas as any, {
+        ref: (value: any) => {
+          canvasApi = value;
+        },
+      }),
+  });
   app.provide(ssrContextKey, { modules: new Set() });
   app.use(pinia);
   app.mount({});
@@ -975,4 +1005,154 @@ it("cancels an active drawing gesture when visibility changes and blocks drawing
   stage.handlers.mouseup();
   expect(store.annotation!.instances).toHaveLength(count);
   expect(store.dirty).toBe(false);
+});
+
+it("paints and erases a local mask with immediate lossless selection before autosave", async () => {
+  const store = await mountedCanvas();
+  store.annotation!.instances = [];
+  store.tool = "brush";
+  store.brushSize = 1;
+  await flush();
+  const host = graph.hosts.at(-1)!;
+  const event = (x: number, y: number) => ({
+    clientX: x,
+    clientY: y,
+    button: 0,
+    pointerId: 1,
+    preventDefault() {},
+  });
+  host.handlers.pointerdown(event(2.5, 2.5));
+  host.handlers.pointermove(event(7.5, 2.5));
+  host.handlers.pointerup(event(7.5, 2.5));
+  await flush();
+  expect(store.object?.mask_manually_edited).toBe(true);
+  expect(store.object?.box).toBeNull();
+  const id = store.object!.id;
+  store.activateSelection();
+  await flush();
+  const stage = graph.stages[0];
+  stage.attrs.pointer = { x: 4.5, y: 2.5 };
+  stage.handlers.mousedown({ target: stage });
+  expect(store.selected).toBe(id);
+  expect(store.selectedGeometry).toBe("mask");
+  store.tool = "eraser";
+  store.eraserSize = 20;
+  await flush();
+  host.handlers.pointerdown(event(5, 5));
+  host.handlers.pointerup(event(5, 5));
+  await flush();
+  expect(store.annotation!.instances).toHaveLength(0);
+  store.undo();
+  await flush();
+  expect(store.annotation!.instances[0].id).toBe(id);
+});
+it.each(["navigation", "selection", "visibility", "tool"])(
+  "cancels unfinished manual strokes after %s",
+  async (change) => {
+    const store = await mountedCanvas();
+    store.annotation!.instances = [];
+    store.tool = "brush";
+    await flush();
+    const host = graph.hosts.at(-1)!;
+    const e = {
+      clientX: 2.5,
+      clientY: 2.5,
+      button: 0,
+      pointerId: 1,
+      preventDefault() {},
+    };
+    host.handlers.pointerdown(e);
+    if (change === "navigation") store.current = { id: "b", path: "b.png" };
+    if (change === "selection") store.selected = "another";
+    if (change === "visibility") store.setLayer("global", "mask", false);
+    if (change === "tool") store.tool = "select";
+    host.handlers.pointerup(e);
+    await flush();
+    expect(store.annotation!.instances).toHaveLength(0);
+    expect(store.manualBusy).toBe(false);
+  },
+);
+it("retains polygon vertices during temporary Space pan", async () => {
+  const store = await mountedCanvas();
+  store.annotation!.instances = [];
+  store.tool = "polygon";
+  await flush();
+  const host = graph.hosts.at(-1)!;
+  host.handlers.pointerdown({
+    clientX: 1,
+    clientY: 1,
+    button: 0,
+    pointerId: 1,
+    preventDefault() {},
+  });
+  const key = vi
+    .mocked(window.addEventListener)
+    .mock.calls.find(([event]) => event === "keydown")![1] as Function;
+  key({ code: "Space", target: { closest: () => null }, preventDefault() {} });
+  expect(store.polygonVertices).toBe(1);
+  expect(store.manualBusy).toBe(true);
+});
+
+it("blocks Backspace during a stroke but removes a polygon vertex", async () => {
+  const store = await mountedCanvas();
+  store.annotation!.instances = [];
+  store.tool = "brush";
+  await flush();
+  const host = graph.hosts.at(-1)!;
+  const e = {
+    clientX: 2,
+    clientY: 2,
+    button: 0,
+    pointerId: 1,
+    preventDefault() {},
+  };
+  host.handlers.pointerdown(e);
+  const preventDefault = vi.fn();
+  expect(canvasApi.manualKey({ key: "Backspace", preventDefault })).toBe(true);
+  expect(preventDefault).toHaveBeenCalledOnce();
+  expect(store.manualBusy).toBe(true);
+  host.handlers.pointerup(e);
+  expect(store.annotation!.instances).toHaveLength(1);
+  store.tool = "polygon";
+  await flush();
+  host.handlers.pointerdown(e);
+  host.handlers.pointerdown({ ...e, clientX: 7 });
+  expect(host.focus).toHaveBeenCalledWith({ preventScroll: true });
+  expect(store.polygonVertices).toBe(2);
+  expect(canvasApi.manualKey({ key: "Backspace", preventDefault })).toBe(true);
+  expect(store.polygonVertices).toBe(1);
+});
+it("evicts previous manual hit buffers after each edit and saved revision", async () => {
+  const store = await mountedCanvas();
+  store.annotation!.instances = [];
+  store.tool = "brush";
+  store.brushSize = 1;
+  await flush();
+  const host = graph.hosts.at(-1)!;
+  const maps = new Set<Map<unknown, any>>();
+  const original = Map.prototype.set;
+  vi.spyOn(Map.prototype, "set").mockImplementation(function (
+    this: Map<unknown, any>,
+    key,
+    value,
+  ) {
+    if (value?.alpha instanceof Uint8Array) maps.add(this);
+    return original.call(this, key, value);
+  });
+  for (let i = 1; i <= 5; i++) {
+    const e = {
+      clientX: i + 0.5,
+      clientY: 2.5,
+      button: 0,
+      pointerId: 1,
+      preventDefault() {},
+    };
+    host.handlers.pointerdown(e);
+    host.handlers.pointerup(e);
+    await flush();
+    store.annotation!.revision++;
+    await flush();
+  }
+  expect(maps.size).toBe(1);
+  expect([...maps][0].size).toBe(1);
 });

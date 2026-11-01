@@ -69,6 +69,7 @@ export interface Instance {
   box: number[] | null;
   polygons: number[][][];
   mask: unknown | null;
+  mask_manually_edited?: boolean;
   points: PromptPoint[];
   prompt_box: number[] | null;
   hidden: boolean;

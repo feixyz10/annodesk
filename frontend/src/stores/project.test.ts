@@ -871,7 +871,7 @@ describe("interactive single-mask prompts", () => {
       path.endsWith("/mask-candidates"),
     );
     expect(calls[0][2]).toMatchObject({ multimask_output: false });
-    expect(calls[1][2]).not.toHaveProperty("multimask_output");
+    expect(calls[1][2]).toMatchObject({ multimask_output: true });
   });
   it("deletes a selected point or prompt box without deleting the mask or instance, and supports undo", async () => {
     const { s, obj } = prepare();
@@ -1315,18 +1315,122 @@ it("keeps whole-object deletion available after unrelated visibility changes", (
   expect(s.annotation!.instances.map((item) => item.id)).toEqual([other.id]);
 });
 
-it.each([false, true])("blocks invisible coordinate edits until the layer is shown (prompt=%s)", (prompt) => {
+it.each([false, true])(
+  "blocks invisible coordinate edits until the layer is shown (prompt=%s)",
+  (prompt) => {
+    const s = initialized();
+    const obj = s.annotation!.instances[0];
+    obj.prompt_box = [1, 1, 8, 8];
+    const kind = prompt ? "prompts" : "box";
+    s.setLayer(obj.id, kind, false);
+    const before = JSON.stringify(s.annotation);
+    s.editBox(obj.id, [2, 2, 9, 9], prompt);
+    expect(JSON.stringify(s.annotation)).toBe(before);
+    expect(s.dirty).toBe(false);
+    s.setLayer(obj.id, kind, true);
+    s.editBox(obj.id, [2, 2, 9, 9], prompt);
+    expect(prompt ? obj.prompt_box : obj.box).toEqual([2, 2, 9, 9]);
+    expect(s.dirty).toBe(true);
+  },
+);
+
+it("commits manual pixels without a box, preserves identity and review rules, and undoes erasure", () => {
+  const s = initialized();
+  s.annotation!.instances = [];
+  s.tool = "brush";
+  const pixels = new Uint8Array(100);
+  pixels[22] = 1;
+  const gesture = s.beginManualEdit()!;
+  expect(s.commitManualMask(gesture, pixels)).toBe(true);
+  const obj = s.object!;
+  expect(obj.box).toBeNull();
+  expect(obj.mask_manually_edited).toBe(true);
+  expect(s.annotation!.segmentation_review).toBe("pending");
+  expect(s.annotation!.detection_review).toBe("ok");
+  const erase = s.beginManualEdit()!;
+  s.commitManualMask(erase, new Uint8Array(100));
+  expect(s.annotation!.instances).toHaveLength(0);
+  s.undo();
+  expect(s.annotation!.instances[0].id).toBe(obj.id);
+  expect(s.annotation!.instances[0].mask_manually_edited).toBe(true);
+});
+it("rejects manual commits after edits/navigation/visibility changes and does not create no-op history", () => {
+  const s = initialized();
+  s.tool = "brush";
+  const pixels = new Uint8Array(100);
+  pixels[22] = 1;
+  let gesture = s.beginManualEdit()!;
+  s.annotation!.notes = "changed";
+  expect(s.commitManualMask(gesture, pixels)).toBe(false);
+  gesture = s.beginManualEdit()!;
+  s.setLayer("global", "mask", false);
+  expect(s.commitManualMask(gesture, pixels)).toBe(false);
+  s.setLayer("global", "mask", true);
+  gesture = s.beginManualEdit()!;
+  expect(s.commitManualMask(gesture, new Uint8Array(100))).toBe(false);
+  expect(s.history).toHaveLength(0);
+  gesture = s.beginManualEdit()!;
+  s.current = { id: "b", path: "b.png" };
+  expect(s.commitManualMask(gesture, pixels)).toBe(false);
+});
+
+it("uses a single read-only replacement preview after manual edits and preserves mask until Apply", async () => {
   const s = initialized();
   const obj = s.annotation!.instances[0];
-  obj.prompt_box = [1, 1, 8, 8];
-  const kind = prompt ? "prompts" : "box";
-  s.setLayer(obj.id, kind, false);
-  const before = JSON.stringify(s.annotation);
-  s.editBox(obj.id, [2, 2, 9, 9], prompt);
-  expect(JSON.stringify(s.annotation)).toBe(before);
-  expect(s.dirty).toBe(false);
-  s.setLayer(obj.id, kind, true);
-  s.editBox(obj.id, [2, 2, 9, 9], prompt);
-  expect(prompt ? obj.prompt_box : obj.box).toEqual([2, 2, 9, 9]);
-  expect(s.dirty).toBe(true);
+  s.selected = obj.id;
+  obj.mask = { size: [10, 10], counts: "original" };
+  obj.mask_manually_edited = true;
+  s.model = "sam";
+  s.models = {
+    config: "models.json",
+    default_model: "sam",
+    models: [
+      {
+        id: "sam",
+        name: "SAM",
+        backend: "sam2",
+        task: "segmentation",
+        available: true,
+        mask_candidates: true,
+        text_prompts: false,
+        path: null,
+        error: null,
+      },
+    ],
+  };
+  const response = {
+    project_id: s.meta!.id,
+    image_id: s.current!.id,
+    instance_id: obj.id,
+    revision: 0,
+    image_stamp: "stamp",
+    model: "sam",
+    items: [
+      {
+        mask: { size: [10, 10], counts: "replacement" },
+        polygons: [],
+        quality: 0.9,
+        overlay: "",
+      },
+    ],
+  };
+  mock.mockResolvedValue(response);
+  await s.segment();
+  expect(mock.mock.calls[0][0]).toContain("mask-candidates");
+  expect(mock.mock.calls[0][2]).toMatchObject({ multimask_output: false });
+  expect(s.candidates?.protected).toBe(true);
+  expect(s.candidates?.phase).toBe("ready");
+  expect(obj.mask).toEqual({ size: [10, 10], counts: "original" });
+  s.setLayer("global", "mask", false);
+  await s.applyCandidate();
+  expect(mock.mock.calls).toHaveLength(1);
+  s.setLayer("global", "mask", true);
+  mock.mockResolvedValue({
+    ...s.annotation,
+    revision: 1,
+    instances: [{ ...obj, mask: response.items[0].mask }],
+  });
+  await s.applyCandidate();
+  expect(s.object!.mask).toEqual(response.items[0].mask);
+  expect(s.object!.mask_manually_edited).toBe(true);
 });

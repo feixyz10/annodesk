@@ -1,6 +1,10 @@
 <script setup lang="ts">
 defineProps<{ name: string; slashed?: boolean }>();
 const paths: Record<string, string> = {
+  brush: "M14 3L21 10L11 18L5 12ZM5 12Q1 15 3 21Q8 22 11 18M12 5L19 12",
+  eraser: "M14 3L22 11L12 21H6L2 17ZM7 12L15 20M12 21H22",
+  polygon:
+    "M5 4L20 7L17 20L3 16ZM4 3H6V5H4ZM19 6H21V8H19ZM16 19H18V21H16ZM2 15H4V17H2Z",
   layers: "M3 7L12 2L21 7L12 12ZM3 12L12 17L21 12M3 17L12 22L21 17",
   eyepartial: "M2 12Q12 0 22 12Q12 24 2 12ZM9 12H15",
   trash: "M4 6H20M9 6V3H15V6M6 6L7 21H17L18 6M10 10V17M14 10V17",

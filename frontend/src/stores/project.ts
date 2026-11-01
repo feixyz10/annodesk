@@ -1,8 +1,11 @@
+import { encodeRle, instancePixels, manualTools } from "../manualMasks";
+import { readPreference, writePreference } from "../preferences";
 import { createVisibility, type LayerKind } from "../visibility";
 import { defineStore } from "pinia";
 import { computed, ref, watch, onScopeDispose } from "vue";
 import {
   request,
+  instance,
   setProjectSession,
   type Annotation,
   type Category,
@@ -263,6 +266,132 @@ export const useProject = defineStore("project", () => {
     },
     { flush: "sync" },
   );
+  const manualTool = computed(() => manualTools.includes(tool.value));
+  const polygonMode = ref<"add" | "subtract">("add");
+  const brushSize = ref(
+    Math.max(
+      1,
+      Math.min(512, Number(readPreference("annodesk.brush-size")) || 24),
+    ),
+  );
+  const eraserSize = ref(
+    Math.max(
+      1,
+      Math.min(512, Number(readPreference("annodesk.eraser-size")) || 24),
+    ),
+  );
+  watch(brushSize, (size) =>
+    writePreference("annodesk.brush-size", String(size)),
+  );
+  watch(eraserSize, (size) =>
+    writePreference("annodesk.eraser-size", String(size)),
+  );
+  const manualBusy = ref(false),
+    polygonVertices = ref(0);
+  let manualGeneration = 0;
+  const manualBlocked = computed(() => {
+    if (!manualTool.value) return "";
+    if (!annotation.value || navigating.value)
+      return "Open an image to draw a mask.";
+    if (annotation.value.excluded)
+      return "Unexclude this image before editing masks.";
+    if (object.value?.locked)
+      return "Unlock this object before editing its mask.";
+    if (
+      !visibility.globalLayers.value.mask ||
+      (object.value && !visibility.layerVisible(object.value, "mask"))
+    )
+      return "Show the mask to edit it.";
+    if (
+      (tool.value === "eraser" ||
+        (tool.value === "polygon" && polygonMode.value === "subtract")) &&
+      !(object.value?.mask || object.value?.polygons.length)
+    )
+      return "Select an object with a mask to erase.";
+    return "";
+  });
+  function revealManualMask() {
+    visibility.setLayer("global", "mask", true);
+    if (object.value) visibility.setLayer(object.value.id, "mask", true);
+  }
+  function manualContextKey() {
+    return JSON.stringify([
+      viewGeneration,
+      meta.value?.session,
+      meta.value?.root,
+      current.value?.id,
+      selected.value,
+      tool.value,
+      task.value,
+      polygonMode.value,
+      annotationKey(),
+      visibility.globalLayers.value,
+      visibility.imageView.value,
+    ]);
+  }
+  function beginManualEdit() {
+    if (!manualTool.value || manualBlocked.value || !annotation.value)
+      return null;
+    cancelInteractive();
+    cancelCandidates();
+    const token = ++manualGeneration;
+    return { token, key: manualContextKey(), annotation: annotation.value };
+  }
+  function validManualEdit(
+    context: NonNullable<ReturnType<typeof beginManualEdit>>,
+  ) {
+    return (
+      context.token === manualGeneration &&
+      context.annotation === annotation.value &&
+      context.key === manualContextKey() &&
+      !manualBlocked.value
+    );
+  }
+  function commitManualMask(
+    context: NonNullable<ReturnType<typeof beginManualEdit>>,
+    pixels: Uint8Array,
+  ) {
+    if (!validManualEdit(context) || !annotation.value) return false;
+    const ann = annotation.value;
+    if (pixels.length !== ann.width * ann.height) return false;
+    const before = instancePixels(object.value ?? null, ann.width, ann.height);
+    if (before.every((value, i) => value === pixels[i])) return false;
+    checkpoint();
+    let obj = object.value;
+    const nonempty = pixels.some(Boolean);
+    if (!obj) {
+      if (!nonempty) return false;
+      obj = instance(defaultClass.value);
+      ann.instances.push(obj);
+      selected.value = obj.id;
+    }
+    obj.mask = nonempty ? encodeRle(pixels, ann.width, ann.height) : null;
+    obj.polygons = [];
+    obj.mask_manually_edited = true;
+    obj.source = "manual";
+    if (!nonempty && !obj.box && !obj.prompt_box && !obj.points.length) {
+      ann.instances = ann.instances.filter((o) => o.id !== obj!.id);
+      selected.value = null;
+    }
+    selectedGeometry.value = nonempty ? "mask" : null;
+    selectedPrompt.value = null;
+    ann.explicit_empty.segmentation = false;
+    changed("segmentation");
+    return true;
+  }
+  watch(
+    tool,
+    () => {
+      if (manualTool.value) {
+        task.value = "segmentation";
+        selectionTarget.value = "results";
+        selectedPrompt.value = null;
+        cancelInteractive();
+        cancelCandidates();
+      }
+    },
+    { flush: "sync" },
+  );
   function newObject() {
     if (navigating.value || !annotation.value || !current.value) return;
     cancelInteractive();
@@ -271,6 +400,11 @@ export const useProject = defineStore("project", () => {
     selected.value = null;
     selectedPrompt.value = null;
     selectedGeometry.value = null;
+    if (manualTool.value) {
+      if (tool.value === "eraser") tool.value = "brush";
+      polygonMode.value = "add";
+      return;
+    }
     tool.value =
       task.value === "detection"
         ? "box"
@@ -313,6 +447,13 @@ export const useProject = defineStore("project", () => {
     if (!obj || obj.locked || annotation.value?.excluded || navigating.value)
       return;
     if (!(obj.box || obj.prompt_box || obj.points.length)) return;
+    if (obj.mask_manually_edited) {
+      promptTimer = setTimeout(
+        () => void generateCandidates(false, false),
+        350,
+      );
+      return;
+    }
     promptStatus.value = "Waiting to update mask…";
     promptTimer = setTimeout(() => {
       promptQueued = true;
@@ -522,6 +663,8 @@ export const useProject = defineStore("project", () => {
     error: string;
     promptKey: string;
     annotationKey: string;
+    multimask: boolean;
+    protected: boolean;
   }
   const candidates = ref<CandidateSession | null>(null),
     candidateNotice = ref("");
@@ -569,7 +712,7 @@ export const useProject = defineStore("project", () => {
     candidateQueued = false;
     candidates.value = null;
   }
-  async function generateCandidates(regenerate = false) {
+  async function generateCandidates(regenerate = false, multimask = true) {
     cancelInteractive();
     if (
       !canGenerateCandidates.value ||
@@ -587,6 +730,8 @@ export const useProject = defineStore("project", () => {
         error: "",
         promptKey: promptKey(),
         annotationKey: annotationKey(),
+        multimask,
+        protected: !!object.value.mask_manually_edited,
       };
     }
     if (candidateFlight) {
@@ -614,6 +759,7 @@ export const useProject = defineStore("project", () => {
           instance_id: instanceId,
           expected_revision: revision,
           project_id: projectId,
+          multimask_output: session.multimask,
         },
       );
       if (
@@ -660,6 +806,13 @@ export const useProject = defineStore("project", () => {
       !annotation.value
     )
       return;
+    if (
+      session.protected &&
+      (!object.value || !visibility.layerVisible(object.value, "mask"))
+    ) {
+      error.value = "Show the mask to edit it.";
+      return;
+    }
     const imageId = current.value.id,
       projectId = meta.value?.id,
       generation = viewGeneration;
@@ -861,6 +1014,7 @@ export const useProject = defineStore("project", () => {
           (o) =>
             !o.locked &&
             o.box &&
+            !o.mask_manually_edited &&
             !o.mask &&
             !o.polygons.length &&
             !loaded.segmentation_blocked?.includes(o.id),
@@ -1078,6 +1232,11 @@ export const useProject = defineStore("project", () => {
     if (next) void load(next);
   }
   async function segment(onlyMissing = false, text = "") {
+    if (!onlyMissing && !text && object.value?.mask_manually_edited) {
+      await generateCandidates(false, false);
+      return;
+    }
+    const manualToken = manualGeneration;
     cancelCandidates();
     if (!annotation.value || !current.value) return;
     cancelInteractive();
@@ -1087,6 +1246,7 @@ export const useProject = defineStore("project", () => {
       !annotation.value.instances.some(
         (o) =>
           !o.locked &&
+          !o.mask_manually_edited &&
           !o.mask &&
           !o.polygons.length &&
           (o.box || o.prompt_box || o.points.length),
@@ -1135,7 +1295,7 @@ export const useProject = defineStore("project", () => {
         meta.value?.id !== projectId
       )
         return;
-      if (version !== editVersion) {
+      if (version !== editVersion || manualToken !== manualGeneration) {
         error.value =
           "Inference finished after newer edits. Your edits were kept; reload to reconcile.";
         return;
@@ -1287,13 +1447,28 @@ export const useProject = defineStore("project", () => {
         clearedSelection = true;
       }
       // Keep the object context (and in-flight inference), but disarm geometry deletion.
-      if (clearedSelection && !selectedGeometry.value && selectedPrompt.value === null)
+      if (
+        clearedSelection &&
+        !selectedGeometry.value &&
+        selectedPrompt.value === null
+      )
         hiddenSelection.value = true;
     },
     { deep: true, flush: "sync" },
   );
   return {
     ...visibility,
+    manualTool,
+    polygonMode,
+    brushSize,
+    eraserSize,
+    manualBusy,
+    polygonVertices,
+    manualBlocked,
+    revealManualMask,
+    beginManualEdit,
+    validManualEdit,
+    commitManualMask,
     selectObjectRow,
     creationLayer,
     creationLayerBlocked,

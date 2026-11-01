@@ -2,7 +2,8 @@
 
 AnnoDesk annotates detection boxes and instance masks in images. You can import existing YOLO detection labels, generate masks from boxes, and review the results manually. The browser interface supports English and Simplified Chinese with a light theme. Images, models, and annotations stay on the computer running the backend.
 
-Version: 0.4.0.
+Version: 0.5.0.
+
 
 ## 1. Installation
 
@@ -27,13 +28,13 @@ Or in Windows PowerShell:
 Install a local release package. For offline installation, prepare its dependencies beforehand:
 
 ```sh
-python -m pip install ./annodesk-0.4.0-py3-none-any.whl
+python -m pip install ./annodesk-0.5.0-py3-none-any.whl
 ```
 
 Once this version is available on PyPI, you can also install it by name:
 
 ```sh
-python -m pip install "annodesk==0.4.0"
+python -m pip install "annodesk==0.5.0"
 ```
 
 A standard installation includes the shared detection and segmentation dependencies, Ultralytics / PyTorch. No extra installation option is needed. Check the environment with:
@@ -49,7 +50,7 @@ Dependency installation may access a Python package index. Inference never downl
 Before upgrading, stop the service and back up the entire project, especially `.annodesk/`. Then run:
 
 ```sh
-python -m pip install --upgrade ./annodesk-0.4.0-py3-none-any.whl
+python -m pip install --upgrade ./annodesk-0.5.0-py3-none-any.whl
 ```
 
 For upgrades from PyPI, use the package name and appropriate version. Restart the service and refresh the page after upgrading. Existing annotations retain their review states.
@@ -298,6 +299,22 @@ Progress uses `finished = succeeded + failed`, with skipped images excluded from
 
 Instances can be deleted, locked, or hidden on the right. Unlock before changing a class. Hiding affects display, not export. Use the wheel to zoom around the cursor. **Pan**, zoom, and **Fit image** are grouped at the canvas's top right. Toggle Pan or hold Space temporarily; dragging from inside a box pans the canvas while selection, box dragging, and resizing are suspended.
 
+### Manual masks: brush, eraser and polygon
+
+The **Mask** group in the left tool rail works without a model. Choose **Brush** (`W`) to add pixels, **Eraser** (`J`) to remove pixels, or **Polygon** (`P`) to draw an area using **Add** or **Subtract**. Selecting a manual mask tool switches the review task to Segmentation. Tool parameters replace the left part of the existing canvas toolbar; Layers, pan and zoom stay in place. Press `V` to return to selection and the model controls.
+
+Select an object to edit its mask, or press `N` to start another object. A new object is only created when you draw a nonempty region. Manual editing keeps the object's class, detection box and SAM prompts, and never creates a detection box automatically. Hidden or locked masks cannot be edited; use **Show mask** or unlock the object first. Excluded images must be unexcluded first.
+
+Brush size is the diameter in original-image pixels (1–512, default 24). Brush and eraser remember separate sizes. Use the number field or `[` / `]`; the slider appears when space permits. Zooming changes the displayed cursor size, not the affected image-pixel diameter. Dragging creates a continuous hard-edged stroke.
+
+For a polygon, click vertices and press `Enter`, click the starting vertex, or choose **Finish** to close it. At least three vertices are needed. `Backspace` removes the last vertex; `Esc` cancels. Add/Subtract stays fixed while the path is open. Hold `Space` between vertices to pan without losing the path. A translucent even-odd preview shows self-intersecting areas.
+
+Each finished stroke or polygon is one undo step and enters normal autosave. Changing image, object, task or tool cancels an unfinished gesture; completed edits remain. Erasing the last pixel removes only the mask and its derived polygons, keeping any box/prompts; an otherwise empty instance is removed. Undo restores it. Erasing everything does not approve the image or confirm that it contains no objects.
+
+Manual changes mark that instance as protected. Automatic/current-image and batch segmentation skip protected masks, including deliberately erased masks; the batch scope summary reports **Manual edits protected** for images skipped for this reason. Explicit **Refine mask**, new SAM prompts, or **Generate candidates** still work, but show a replacement preview in the existing top toolbar. Only **Apply replacement** replaces the mask. Cancel keeps the manual result. SAM predicts from prompts; it does not promise to preserve your painted pixels. Protection remains after applying a replacement.
+
+RLE preserves holes and disconnected regions. YOLO exports are polygon projections and can lose holes; use COCO RLE when exact pixels matter.
+
 ### Refining masks and choosing candidates
 
 Adding/removing a point or completing/adjusting a **SAM box prompt** updates the selected instance's single mask after roughly 350ms of debounce. Repeatedly clicking Segment current is unnecessary. Instance details show waiting, inference, completion, or failure. Continuous edits retain only the latest prompts. Navigation, tool/model changes, and other edits invalidate older responses. Failed inference preserves the existing mask; use **Refine mask** to retry.
@@ -422,6 +439,9 @@ Single-key shortcuts are suppressed inside inputs, class search, and IME composi
 
 | Action | Keys |
 | --- | --- |
+| Brush / eraser / polygon | W / J / P |
+| Decrease / increase brush diameter | [ / ] |
+| Finish polygon / remove last vertex / cancel drawing | Enter / Backspace / Esc |
 | Previous / next image | A / D or ← / → |
 | Select / detection box | V / R |
 | Select SAM prompts | Shift+V |

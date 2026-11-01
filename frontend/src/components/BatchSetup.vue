@@ -288,6 +288,8 @@ function start() {
         <dd>{{ preview.counts.review_state }}</dd>
         <dt>{{ t("No eligible objects / existing labels") }}</dt>
         <dd>{{ preview.counts.no_content }}</dd>
+        <dt>{{ t("Manual edits protected") }}</dt>
+        <dd>{{ preview.counts.manual_edits_protected ?? 0 }}</dd>
         <dt>{{ t("Invalid inputs") }}</dt>
         <dd>{{ preview.counts.invalid }}</dd>
         <dt>{{ t("Images to process") }}</dt>

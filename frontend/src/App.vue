@@ -34,6 +34,7 @@ import AnnotationCanvas from "./components/AnnotationCanvas.vue";
 import ImageList from "./components/ImageList.vue";
 import ClassPalette from "./components/ClassPalette.vue";
 import CategoryEditor from "./components/CategoryEditor.vue";
+import ManualMaskControls from "./components/ManualMaskControls.vue";
 import CandidateBar from "./components/CandidateBar.vue";
 import FilmStrip from "./components/FilmStrip.vue";
 import Icon from "./components/Icon.vue";
@@ -112,6 +113,13 @@ const shortcuts = [
   ["Select", "V"],
   ["Select SAM prompts", "Shift+V"],
   ["Detection box", "R"],
+  ["Brush", "W"],
+  ["Eraser", "J"],
+  ["Polygon", "P"],
+  ["Decrease / increase brush size", "[ / ]"],
+  ["Finish polygon", "Enter"],
+  ["Remove last polygon vertex", "Backspace"],
+  ["Cancel drawing", "Esc"],
   ["Positive point", "Q"],
   ["Negative point", "E"],
   ["SAM box prompt", "B"],
@@ -146,6 +154,15 @@ const toolGroups = [
     description:
       "Detection boxes are annotation results and are saved to labels/.",
     items: [["box", "Detection box", "R"]],
+  },
+  {
+    label: "Mask",
+    description: "Draw or repair masks directly, without a model.",
+    items: [
+      ["brush", "Brush", "W"],
+      ["eraser", "Eraser", "J"],
+      ["polygon", "Polygon", "P"],
+    ],
   },
   {
     label: "SAM",
@@ -245,7 +262,7 @@ function key(e: KeyboardEvent) {
     e.preventDefault();
     return;
   }
-  if (e.key === "Escape" && inspectorOpen.value) {
+  if (e.key === "Escape" && inspectorOpen.value && !store.manualBusy) {
     inspectorOpen.value = false;
     e.preventDefault();
     return;
@@ -269,6 +286,12 @@ function key(e: KeyboardEvent) {
     store.classPickerOpen
   )
     return;
+  if (
+    (e.target as HTMLElement).closest("button") &&
+    ["Enter", " "].includes(e.key)
+  )
+    return;
+  if (canvas.value?.manualKey(e)) return;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
     void store.save();
@@ -325,6 +348,9 @@ function key(e: KeyboardEvent) {
     review({ "1": "ok", "2": "uncertain", "3": "excluded" }[k]!);
   else if (
     {
+      w: "brush",
+      j: "eraser",
+      p: "polygon",
       r: "box",
       q: "positive",
       e: "negative",
@@ -333,6 +359,9 @@ function key(e: KeyboardEvent) {
     }[k]
   )
     store.tool = {
+      w: "brush",
+      j: "eraser",
+      p: "polygon",
       r: "box",
       q: "positive",
       e: "negative",
@@ -746,51 +775,59 @@ onBeforeUnmount(() => {
         <section class="center">
           <div class="canvasbar">
             <div class="canvas-main-controls">
-              <button
-                class="model-summary"
-                :title="t('Choose a model, load it, and configure inference')"
-                @click="modelSettings = true"
-              >
-                <span class="model-summary-name"
-                  >{{ store.task === "detection" ? t("Detector") : t("SAM") }}:
-                  {{ currentModel?.name || t("Choose model") }}</span
+              <ManualMaskControls
+                v-if="store.manualTool || store.candidates?.protected"
+                @finish="canvas?.finishPolygon()"
+                @cancel="canvas?.cancelManual()"
+              />
+              <template v-else>
+                <button
+                  class="model-summary"
+                  :title="t('Choose a model, load it, and configure inference')"
+                  @click="modelSettings = true"
                 >
-                <small>{{ t(currentModelState) }}</small>
-              </button>
-              <button
-                class="primary"
-                :disabled="
-                  !store.meta ||
-                  (store.task === 'detection' && !store.detectionModel)
-                "
-                @click="
-                  store.task === 'detection'
-                    ? store.detect()
-                    : store.segment(true)
-                "
-              >
-                {{
-                  store.task === "detection"
-                    ? t("Detect current")
-                    : t("Segment current")
-                }}
-              </button>
-              <label
-                v-if="store.task === 'segmentation'"
-                :title="t('Process missing masks when switching images')"
-                ><input v-model="store.autoSegment" type="checkbox" />
-                {{ t("Auto-segment") }}</label
-              >
-              <label
-                v-else
-                :title="t('Detect empty, unreviewed images when switching')"
-                ><input
-                  v-model="store.autoDetect"
-                  type="checkbox"
-                  :disabled="!store.detectionModel"
-                />
-                {{ t("Auto-detect") }}</label
-              >
+                  <span class="model-summary-name"
+                    >{{
+                      store.task === "detection" ? t("Detector") : t("SAM")
+                    }}: {{ currentModel?.name || t("Choose model") }}</span
+                  >
+                  <small>{{ t(currentModelState) }}</small>
+                </button>
+                <button
+                  class="primary"
+                  :disabled="
+                    !store.meta ||
+                    (store.task === 'detection' && !store.detectionModel)
+                  "
+                  @click="
+                    store.task === 'detection'
+                      ? store.detect()
+                      : store.segment(true)
+                  "
+                >
+                  {{
+                    store.task === "detection"
+                      ? t("Detect current")
+                      : t("Segment current")
+                  }}
+                </button>
+                <label
+                  v-if="store.task === 'segmentation'"
+                  :title="t('Process missing masks when switching images')"
+                  ><input v-model="store.autoSegment" type="checkbox" />
+                  {{ t("Auto-segment") }}</label
+                >
+                <label
+                  v-else
+                  :title="t('Detect empty, unreviewed images when switching')"
+                  ><input
+                    v-model="store.autoDetect"
+                    type="checkbox"
+                    :disabled="!store.detectionModel"
+                  />
+                  {{ t("Auto-detect") }}</label
+                >
+              </template>
             </div>
             <div
               class="view-tools"
@@ -929,7 +966,7 @@ onBeforeUnmount(() => {
               {{ store.annotation?.height }}</span
             >
           </div>
-          <CandidateBar />
+          <CandidateBar v-if="!store.candidates?.protected" />
           <FilmStrip />
         </section>
         <div
@@ -1068,7 +1105,15 @@ onBeforeUnmount(() => {
       </main>
       <footer>
         <span>{{ toolLabel(store.tool) }}</span
-        ><span>{{ t("A / D or ← / →: previous / next image") }}</span
+        ><span>{{
+          t(
+            store.manualTool
+              ? store.tool === "polygon"
+                ? "Click vertices · Enter finish · Backspace undo point · Esc cancel"
+                : "Drag to paint · [ ] size · N new object · Space pan"
+              : "A / D or ← / →: previous / next image",
+          )
+        }}</span
         ><span class="grow"></span
         ><span :class="{ warning: store.dirty }">{{
           store.saving

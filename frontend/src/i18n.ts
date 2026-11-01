@@ -66,6 +66,9 @@ const statusNames: Record<string, string> = {
   project_subset: "Project is a subset",
 };
 const toolNames: Record<string, string> = {
+  brush: "Brush",
+  eraser: "Eraser",
+  polygon: "Polygon",
   select: "Select",
   box: "Draw box",
   positive: "Positive point",

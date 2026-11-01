@@ -14,7 +14,13 @@ from annodesk.execution import ImageExecutor, file_stamp
 from annodesk.inference import SegmentRequest, compute_annotation
 from annodesk.lease import ProjectLease
 from annodesk.models import ModelConfig, ModelRegistry
-from annodesk.operations import commit_result, eligible, prepare_detection, target_task
+from annodesk.operations import (
+    commit_result,
+    content_skip_reason,
+    eligible,
+    prepare_detection,
+    target_task,
+)
 from annodesk.storage import Project, atomic_write
 
 
@@ -216,11 +222,10 @@ def run_batch(
                             else "review_state"
                             if getattr(annotation, target_task(body) + "_review")
                             not in body.review_states
-                            else "no_content"
+                            else content_skip_reason(annotation, body)
                         )
-                        report.setdefault(
-                            "skip_reasons", {"excluded": 0, "review_state": 0, "no_content": 0}
-                        )[reason] += 1
+                        reasons = report.setdefault("skip_reasons", {})
+                        reasons[reason] = reasons.get(reason, 0) + 1
                         report["skipped"] += 1
                         report["remaining"].remove(image_id)
                 except Exception as error:

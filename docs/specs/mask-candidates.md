@@ -30,3 +30,8 @@
 接口参考：[Ultralytics SAM Predictor](https://docs.ultralytics.com/reference/models/sam/predict/)。
 
 0.2.0真实验收见[验证记录](../validation/real-models-2026-10-22.md)：SAM 2.1 Tiny在CPU/MPS通过实际提示组合，MPS 16图128次调用覆盖正点、正负点、框及框加正负点的单/多掩码。输入点必须为`[1,N,2]`、标签为`[1,N]`，不把N个点解释为N个对象。真实模型可返回少于三个有效候选，也可能全部为空；空输出保持原标注并提示。原图尺寸、候选只读、过期Apply拒绝、mask-only与中文页面交互均已复核；其他模型及CUDA仍未实测。
+
+
+## 0.5.0扩展：手工修补后的替换预览
+
+[手工mask设计](manual-masks.md)实现对已手工修改的实例使用显式替换预览，复用候选的只读推理、单请求及revision/指纹校验；保护预览控件占用既有顶部参数区，不增加画布外行数。已在0.5.0实现；单结果预览显式使用multimask_output=False，多候选仍为True，Apply后保留人工保护标记。不改变上文0.4.0发布记录。

@@ -30,9 +30,25 @@ def eligible(annotation, body):
         )
     blocked = segmentation_blocked_ids(annotation.instances)
     return any(
-        o.box and not o.mask and not o.polygons and not o.locked and o.id not in blocked
+        o.box
+        and not o.mask
+        and not o.polygons
+        and not o.locked
+        and not o.mask_manually_edited
+        and o.id not in blocked
         for o in annotation.instances
     )
+
+
+def content_skip_reason(annotation, body):
+    if body.operation == "segmentation" and any(
+        o.mask_manually_edited
+        and not o.locked
+        and (o.box or o.prompt_box or o.points or o.mask or o.polygons)
+        for o in annotation.instances
+    ):
+        return "manual_edits_protected"
+    return "no_content"
 
 
 def prepare_detection(project, body, names):
@@ -233,7 +249,14 @@ def preview(project, body):
     )
     if not ids or any(image_id not in project.entries for image_id in ids):
         raise ValueError("Choose a non-empty image range belonging to this project")
-    counts = {"excluded": 0, "review_state": 0, "no_content": 0, "eligible": 0, "invalid": 0}
+    counts = {
+        "excluded": 0,
+        "review_state": 0,
+        "no_content": 0,
+        "eligible": 0,
+        "invalid": 0,
+        "manual_edits_protected": 0,
+    }
     errors = []
     for image_id in ids:
         try:
@@ -244,7 +267,7 @@ def preview(project, body):
             elif getattr(annotation, target_task(body) + "_review") not in body.review_states:
                 counts["review_state"] += 1
             elif not eligible(annotation, body):
-                counts["no_content"] += 1
+                counts[content_skip_reason(annotation, body)] += 1
             else:
                 counts["eligible"] += 1
         except Exception as error:

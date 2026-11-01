@@ -1480,6 +1480,9 @@ button {
     font-size: 11px;
   }
 }
+.canvas-host:focus {
+  outline: none;
+}
 .canvas-host {
   cursor: var(--tool-cursor, default);
 }
@@ -1788,4 +1791,68 @@ button {
 .object-column-headings .visibility-hidden,
 .inspector-object-row button.visibility-hidden {
   color: #8491a5;
+}
+
+/* Manual tools reuse the existing 48px toolbar; only its left contents scroll. */
+.manual-mask-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.manual-mask-controls > strong {
+  font-weight: 600;
+}
+.manual-target {
+  color: #526279;
+  padding-right: 6px;
+}
+.manual-size {
+  display: flex !important;
+  align-items: center;
+  gap: 6px;
+}
+.manual-size input {
+  width: 62px;
+  min-width: 62px;
+  padding: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.manual-size-slider {
+  width: 88px;
+  min-width: 88px;
+  padding: 0;
+  accent-color: #315fe9;
+}
+.manual-modes {
+  display: flex;
+  gap: 2px;
+}
+.manual-mask-controls button.active {
+  background: #e8eeff;
+  border-color: #829df5;
+  color: #2149cb;
+}
+.manual-blocked {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #80521b;
+}
+.tools {
+  flex-shrink: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+@media (max-width: 1400px) {
+  .manual-size-slider {
+    display: none;
+  }
+}
+@media (max-width: 1100px) {
+  .manual-target {
+    display: none;
+  }
 }

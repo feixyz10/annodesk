@@ -24,6 +24,7 @@ class Instance(BaseModel):
     box: list[float] | None = None
     polygons: list[list[list[float]]] = Field(default_factory=list)
     mask: dict | None = None
+    mask_manually_edited: bool = False
     points: list[Point] = Field(default_factory=list)
     prompt_box: list[float] | None = None
     hidden: bool = False

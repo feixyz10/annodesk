@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, watch, computed } from "vue";
 import Konva from "konva";
+import { createManualCanvas } from "../manualCanvas";
+import { instancePixels, maskCanvas } from "../manualMasks";
 import { toolCursors } from "../toolCursors";
 import { maskOutline } from "../maskOutline";
 import { useProject, type HoverTarget } from "../stores/project";
@@ -14,6 +16,8 @@ const cursor = computed(() => {
   if (store.navigating) return "wait";
   if (spaceHeld.value || store.tool === "pan")
     return panning.value ? "grabbing" : "grab";
+  if (store.manualTool && store.manualBlocked) return "not-allowed";
+  if (store.manualTool) return store.tool === "polygon" ? "crosshair" : "none";
   if (store.tool === "select")
     return store.selectionTarget === "prompts"
       ? toolCursors.prompts
@@ -29,6 +33,11 @@ let stage: Konva.Stage,
   start: { x: number; y: number } | null = null,
   space = false,
   transformer: Konva.Transformer;
+let manual: ReturnType<typeof createManualCanvas> | undefined;
+const localMasks = new Map<
+  string,
+  { mask: unknown; color: string; image: HTMLCanvasElement }
+>();
 let gestureGeneration = 0;
 let drawingContext: {
   generation: number;
@@ -52,6 +61,7 @@ function cancelDrawing() {
   layer?.batchDraw();
 }
 function invalidateGestures() {
+  manual?.cancel();
   clearHover();
   gestureGeneration++;
   cancelDrawing();
@@ -72,6 +82,7 @@ const maskHitCache = new Map<
 >();
 let outlineCache: { key: string; image: HTMLCanvasElement } | null = null;
 function drawSelectionOutline() {
+  if (manual?.hides(store.selected ?? "")) return;
   const obj = store.object,
     ann = store.annotation;
   if (store.candidate && store.candidates?.response?.instance_id === obj?.id) {
@@ -122,11 +133,20 @@ function drawSelectionOutline() {
     }),
   );
 }
+const maskIds = new WeakMap<object, number>();
+let maskId = 0;
 function overlayKey(id: string, revision: number, color: string) {
+  const mask = store.annotation?.instances.find((o) => o.id === id)?.mask;
+  let identity = 0;
+  if (mask && typeof mask === "object") {
+    if (!maskIds.has(mask)) maskIds.set(mask, ++maskId);
+    identity = maskIds.get(mask)!;
+  }
   return JSON.stringify([
     store.meta?.session ?? store.meta?.id,
     store.current?.id,
     id,
+    identity,
     revision,
     color,
   ]);
@@ -406,22 +426,26 @@ function draw() {
     a.instances
       .filter((o) => o.mask)
       .map((o) =>
-        JSON.stringify([
-          store.meta?.session ?? store.meta?.id,
-          store.current?.id,
+        overlayKey(
           o.id,
           a.revision,
           store.meta?.classes.find((c) => c.id === o.class_id)?.color ??
             "#657286",
-        ]),
+        ),
       ),
   );
+  for (const id of localMasks.keys())
+    if (
+      !a.instances.some((o) => o.id === id && o.mask_manually_edited && o.mask)
+    )
+      localMasks.delete(id);
   for (const key of maskCache.keys()) {
     if (!liveKeys.has(key)) {
       maskCache.delete(key);
-      maskHitCache.delete(key);
     }
   }
+  for (const key of maskHitCache.keys())
+    if (!liveKeys.has(key)) maskHitCache.delete(key);
   if (background)
     layer.add(
       new Konva.Image({
@@ -438,6 +462,7 @@ function draw() {
     const previewing = !!(
       store.candidate && store.candidates?.response?.instance_id === object.id
     );
+    const manualDraft = manual?.hides(object.id);
     if (previewing && candidateImage && store.layerVisible(object, "mask"))
       layer.add(
         new Konva.Image({
@@ -448,6 +473,7 @@ function draw() {
         }),
       );
     if (
+      !manualDraft &&
       !previewing &&
       object.mask &&
       store.current &&
@@ -457,77 +483,120 @@ function draw() {
         projectId = store.meta?.session ?? store.meta?.id,
         revision = a.revision,
         generation = imageGeneration,
-        key = JSON.stringify([projectId, imageId, object.id, revision, color]);
-      const cached = maskCache.get(key);
-      if (cached)
-        layer.add(
-          new Konva.Image({
-            image: cached,
-            width: a.width,
-            height: a.height,
-            listening: false,
-          }),
-        );
-      else if (!store.dirty && !loadingMasks.has(key)) {
-        loadingMasks.add(key);
-        const im = new Image();
-        im.crossOrigin = "anonymous";
-        im.src = projectResource(
-          `/images/${imageId}/masks/${object.id}?revision=${a.revision}&color=${encodeURIComponent(color)}`,
-        );
-        im.onload = () => {
-          if (generation !== imageGeneration) return;
-          loadingMasks.delete(key);
-          if (
-            store.current?.id === imageId &&
-            (store.meta?.session ?? store.meta?.id) === projectId &&
-            store.annotation?.revision === revision
-          ) {
-            const canvas = document.createElement("canvas");
-            canvas.width = a.width;
-            canvas.height = a.height;
-            const context = canvas.getContext("2d", {
-              willReadFrequently: true,
+        key = overlayKey(object.id, revision, color);
+      if (object.mask_manually_edited) {
+        try {
+          let local = localMasks.get(object.id);
+          if (!local || local.mask !== object.mask || local.color !== color) {
+            const pixels = instancePixels(object, a.width, a.height);
+            local = {
+              mask: object.mask,
+              color,
+              image: maskCanvas(pixels, a.width, a.height, color),
+            };
+            localMasks.set(object.id, local);
+            maskHitCache.set(key, {
+              width: a.width,
+              height: a.height,
+              alpha: pixels,
             });
-            if (context) {
-              try {
-                context.drawImage(im, 0, 0, a.width, a.height);
-                const rgba = context.getImageData(0, 0, a.width, a.height).data;
-                const alpha = new Uint8Array(a.width * a.height);
-                for (let i = 0; i < alpha.length; i++)
-                  alpha[i] = rgba[i * 4 + 3];
-                maskHitCache.set(key, {
-                  width: a.width,
-                  height: a.height,
-                  alpha,
-                });
-              } catch {
-                store.error =
-                  "Could not prepare mask selection; reload the image.";
-              }
-            }
-            maskCache.set(key, im);
-            draw();
+          } else if (!maskHitCache.has(key)) {
+            maskHitCache.set(key, {
+              width: a.width,
+              height: a.height,
+              alpha: instancePixels(object, a.width, a.height),
+            });
           }
-        };
-        im.onerror = () => {
-          if (generation !== imageGeneration) return;
-          loadingMasks.delete(key);
-          if (
-            store.current?.id === imageId &&
-            (store.meta?.session ?? store.meta?.id) === projectId &&
-            store.annotation?.revision === revision &&
-            !store.dirty
-          )
-            store.error = "Could not load lossless mask overlay";
-        };
+          layer.add(
+            new Konva.Image({
+              image: local.image,
+              width: a.width,
+              height: a.height,
+              listening: false,
+            }),
+          );
+        } catch (e) {
+          store.error = String(e);
+        }
+      } else {
+        const cached = maskCache.get(key);
+        if (cached)
+          layer.add(
+            new Konva.Image({
+              image: cached,
+              width: a.width,
+              height: a.height,
+              listening: false,
+            }),
+          );
+        else if (!store.dirty && !loadingMasks.has(key)) {
+          loadingMasks.add(key);
+          const im = new Image();
+          im.crossOrigin = "anonymous";
+          im.src = projectResource(
+            `/images/${imageId}/masks/${object.id}?revision=${a.revision}&color=${encodeURIComponent(color)}`,
+          );
+          im.onload = () => {
+            if (generation !== imageGeneration) return;
+            loadingMasks.delete(key);
+            if (
+              store.current?.id === imageId &&
+              (store.meta?.session ?? store.meta?.id) === projectId &&
+              store.annotation?.revision === revision
+            ) {
+              const canvas = document.createElement("canvas");
+              canvas.width = a.width;
+              canvas.height = a.height;
+              const context = canvas.getContext("2d", {
+                willReadFrequently: true,
+              });
+              if (context) {
+                try {
+                  context.drawImage(im, 0, 0, a.width, a.height);
+                  const rgba = context.getImageData(
+                    0,
+                    0,
+                    a.width,
+                    a.height,
+                  ).data;
+                  const alpha = new Uint8Array(a.width * a.height);
+                  for (let i = 0; i < alpha.length; i++)
+                    alpha[i] = rgba[i * 4 + 3];
+                  maskHitCache.set(key, {
+                    width: a.width,
+                    height: a.height,
+                    alpha,
+                  });
+                } catch {
+                  store.error =
+                    "Could not prepare mask selection; reload the image.";
+                }
+              }
+              maskCache.set(key, im);
+              draw();
+            }
+          };
+          im.onerror = () => {
+            if (generation !== imageGeneration) return;
+            loadingMasks.delete(key);
+            if (
+              store.current?.id === imageId &&
+              (store.meta?.session ?? store.meta?.id) === projectId &&
+              store.annotation?.revision === revision &&
+              !store.dirty
+            )
+              store.error = "Could not load lossless mask overlay";
+          };
+        }
       }
     }
     const linkedResult =
       store.selected === object.id &&
       store.selectedPrompt === null &&
       store.selectionTarget === "results";
-    for (const points of !store.layerVisible(object, "mask")
+    for (const points of manualDraft ||
+    object.mask_manually_edited ||
+    !store.layerVisible(object, "mask")
       ? []
       : previewing
         ? store.candidate!.polygons
@@ -755,8 +824,10 @@ function draw() {
       layer.add(point);
     });
   }
-  if (store.selectedGeometry !== "box") drawSelectionOutline();
+  if (store.selectedGeometry !== "box" && !manual?.hides(store.selected ?? ""))
+    drawSelectionOutline();
   layer.batchDraw();
+  manual?.render();
 }
 function key(e: KeyboardEvent) {
   if (
@@ -770,9 +841,13 @@ function key(e: KeyboardEvent) {
   )
     return;
   if (e.code === "Space") {
+    if (manual?.isPainting()) {
+      e.preventDefault();
+      return;
+    }
     e.preventDefault();
     if (!space) {
-      invalidateGestures();
+      if (!store.manualTool) invalidateGestures();
       space = true;
       spaceHeld.value = true;
       stage?.draggable(true);
@@ -831,6 +906,7 @@ onMounted(() => {
       panning.value = false;
     }
   });
+  manual = createManualCanvas(store, stage, host.value!, draw);
   observer.observe(host.value!);
   window.addEventListener("blur", blur);
   window.addEventListener("focusin", focusChanged);
@@ -842,7 +918,7 @@ onMounted(() => {
   stage.on("mousedown touchstart", (e) => {
     clearHover();
     // Transformer anchors own resizing. Never reinterpret them as mask/background selection.
-    if (isTransformHandle(e.target)) return;
+    if (isTransformHandle(e.target) || store.manualTool) return;
     if (
       !store.annotation ||
       store.navigating ||
@@ -940,6 +1016,7 @@ onMounted(() => {
 async function loadImage() {
   const generation = ++imageGeneration;
   background = null;
+  localMasks.clear();
   maskCache.clear();
   maskHitCache.clear();
   outlineCache = null;
@@ -1025,6 +1102,8 @@ watch(
   },
 );
 onBeforeUnmount(() => {
+  manual?.destroy();
+  manual = undefined;
   invalidateGestures();
   imageGeneration++;
   maskCache.clear();
@@ -1041,11 +1120,34 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", key);
   window.removeEventListener("keyup", release);
 });
-defineExpose({ fit, zoom, ratio });
+watch(
+  () =>
+    JSON.stringify([
+      store.annotation,
+      store.selected,
+      store.task,
+      store.polygonMode,
+    ]),
+  () => manual?.validate(),
+  { flush: "sync" },
+);
+watch(
+  () => [store.brushSize, store.eraserSize],
+  () => manual?.render(),
+);
+defineExpose({
+  fit,
+  zoom,
+  ratio,
+  manualKey: (e: KeyboardEvent) => manual?.key(e),
+  finishPolygon: () => manual?.finish(),
+  cancelManual: () => manual?.cancel(),
+});
 </script>
 <template>
   <div
     ref="host"
+    tabindex="-1"
     class="canvas-host"
     :style="{ '--tool-cursor': cursor }"
   ></div>
